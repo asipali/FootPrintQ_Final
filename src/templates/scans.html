@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Scans & Reconnaissance — FootprintIQ{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Reconnaissance & Vulnerability Scans</h1>
+      <p class="text-sm text-slate-500 mt-1">Multi-engine scanner execution with strict scope authorization</p>
+    </div>
+  </div>
+
+  <!-- Launch Scan Card -->
+  <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">Execute Authorized Scan</h2>
+    <form action="/api/v1/scans" method="POST" id="scanForm" class="space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Investigation -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Investigation ID</label>
+          <input type="text" name="investigation_id" value="INV-20261110-001" required
+                 class="w-full text-sm px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <!-- Target IP / Domain -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Target Address</label>
+          <select name="target" required class="w-full text-sm px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="192.168.56.111" selected>192.168.56.111 (Metasploitable2 Authorized Lab VM)</option>
+            <option value="127.0.0.1">127.0.0.1 (Local Diagnostic Loopback)</option>
+            <option value="example.com">example.com (Passive OSINT Only)</option>
+          </select>
+        </div>
+
+        <!-- Scan Type -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase mb-1">Scanner Engine / Mode</label>
+          <select name="scan_type" required class="w-full text-sm px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="combined" selected>Combined Multi-Engine Assessment</option>
+            <option value="nmap_nse">Nmap NSE (Vulnerability Scripts)</option>
+            <option value="nmap_services">Nmap Service & OS Discovery</option>
+            <option value="greenbone">Greenbone / OpenVAS Assessment</option>
+            <option value="nessus">Tenable Nessus Scanner</option>
+            <option value="passive">Passive OSINT (WHOIS, DNS, theHarvester, RDAP)</option>
+            <option value="network_discovery">Network Ping Discovery</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="pt-2 flex justify-end">
+        <button type="button" onclick="submitScan()" id="btnSubmit"
+                class="bg-blue-600 hover:bg-blue-500 text-white font-medium px-5 py-2 rounded-lg text-sm shadow-sm transition">
+          Launch Scan Execution
+        </button>
+      </div>
+    </form>
+    <div id="scanFeedback" class="mt-4 hidden p-3 rounded-lg text-sm"></div>
+  </div>
+
+  <!-- Scan Execution History -->
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">Execution History</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider">
+          <tr>
+            <th class="py-2.5 px-3">Scan ID</th>
+            <th class="py-2.5 px-3">Target</th>
+            <th class="py-2.5 px-3">Scan Type</th>
+            <th class="py-2.5 px-3">Status</th>
+            <th class="py-2.5 px-3">Started</th>
+            <th class="py-2.5 px-3">Details</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for s in scans %}
+          <tr class="hover:bg-slate-50/60 transition">
+            <td class="py-3 px-3 mono font-medium text-slate-800">{{ s.scan_id }}</td>
+            <td class="py-3 px-3 mono text-slate-700">{{ s.target }}</td>
+            <td class="py-3 px-3 font-semibold text-slate-900 capitalize">{{ s.scan_type }}</td>
+            <td class="py-3 px-3">
+              <span class="px-2 py-0.5 rounded font-bold text-xs {% if s.status == 'completed' %}bg-emerald-100 text-emerald-800{% elif s.status == 'failed' %}bg-rose-100 text-rose-800{% else %}bg-blue-100 text-blue-800{% endif %} capitalize">
+                {{ s.status }}
+              </span>
+            </td>
+            <td class="py-3 px-3 text-slate-500">{{ s.started_at or '—' }}</td>
+            <td class="py-3 px-3 text-slate-500">
+              {% if s.error_message %}
+              <span class="text-rose-600 truncate max-w-xs block" title="{{ s.error_message }}">{{ s.error_message }}</span>
+              {% else %}
+              <span class="text-emerald-700">Completed successfully</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="py-8 text-center text-slate-400">No scans executed yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+async function submitScan() {
+  const btn = document.getElementById('btnSubmit');
+  const feedback = document.getElementById('scanFeedback');
+  const form = document.getElementById('scanForm');
+  
+  btn.disabled = true;
+  btn.innerText = 'Executing scan...';
+  feedback.className = 'mt-4 p-3 rounded-lg text-sm bg-blue-50 text-blue-800 border border-blue-200 block';
+  feedback.innerText = 'Scan is running... Please wait while multi-scanner assessment executes.';
+
+  const payload = {
+    investigation_id: form.investigation_id.value,
+    target: form.target.value,
+    scan_type: form.scan_type.value
+  };
+
+  try {
+    const res = await fetch('/api/v1/scans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok) {
+      feedback.className = 'mt-4 p-3 rounded-lg text-sm bg-emerald-50 text-emerald-800 border border-emerald-200 block';
+      feedback.innerText = `Scan ${data.scan_id || ''} completed successfully! Findings detected: ${data.vulnerabilities_found || 0}. Reloading...`;
+      setTimeout(() => window.location.reload(), 1500);
+    } else {
+      feedback.className = 'mt-4 p-3 rounded-lg text-sm bg-rose-50 text-rose-800 border border-rose-200 block';
+      feedback.innerText = `Scan failed: ${data.detail || JSON.stringify(data)}`;
+      btn.disabled = false;
+      btn.innerText = 'Launch Scan Execution';
+    }
+  } catch (err) {
+    feedback.className = 'mt-4 p-3 rounded-lg text-sm bg-rose-50 text-rose-800 border border-rose-200 block';
+    feedback.innerText = `Error: ${err.message}`;
+    btn.disabled = false;
+    btn.innerText = 'Launch Scan Execution';
+  }
+}
+</script>
+{% endblock %}
+

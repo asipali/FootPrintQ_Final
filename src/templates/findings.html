@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Vulnerability Findings — FootprintIQ{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Vulnerability Findings & Correlation</h1>
+      <p class="text-sm text-slate-500 mt-1">Multi-scanner vulnerability correlation with CVSS scoring and remediation guidance</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-slate-500">Filter by Severity:</span>
+      <a href="/findings" class="px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-200 text-slate-800">All</a>
+      <a href="/findings?severity=Critical" class="px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-100 text-rose-800">Critical</a>
+      <a href="/findings?severity=High" class="px-2.5 py-1 rounded-md text-xs font-semibold bg-orange-100 text-orange-800">High</a>
+      <a href="/findings?severity=Medium" class="px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-100 text-amber-800">Medium</a>
+    </div>
+  </div>
+
+  <!-- Findings Table -->
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider border-b border-slate-200">
+          <tr>
+            <th class="py-3 px-4">Finding ID / Target</th>
+            <th class="py-3 px-4">Service</th>
+            <th class="py-3 px-4">Severity</th>
+            <th class="py-3 px-4">CVE Identifier</th>
+            <th class="py-3 px-4">Vulnerability Title</th>
+            <th class="py-3 px-4">Scanner Source</th>
+            <th class="py-3 px-4">Verification</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for f in findings %}
+          <tr class="hover:bg-slate-50/80 transition">
+            <td class="py-3 px-4">
+              <div class="mono font-semibold text-slate-900">{{ f.target_ip }}:{{ f.port or 'all' }}</div>
+              <div class="mono text-[10px] text-slate-400">{{ f.finding_id }}</div>
+            </td>
+            <td class="py-3 px-4">
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700">
+                {{ f.protocol }}/{{ f.service or 'unknown' }}
+              </span>
+            </td>
+            <td class="py-3 px-4">
+              <span class="px-2 py-0.5 rounded font-bold text-xs {% if f.severity == 'Critical' %}bg-rose-100 text-rose-800 border border-rose-200{% elif f.severity == 'High' %}bg-orange-100 text-orange-800 border border-orange-200{% elif f.severity == 'Medium' %}bg-amber-100 text-amber-800 border border-amber-200{% else %}bg-slate-100 text-slate-700{% endif %}">
+                {{ f.severity }}
+              </span>
+              {% if f.cvss_score %}
+              <span class="ml-1 text-[10px] text-slate-500 font-medium">CVSS {{ f.cvss_score }}</span>
+              {% endif %}
+            </td>
+            <td class="py-3 px-4 mono font-semibold text-blue-700">
+              {{ f.cve_identifiers or '—' }}
+            </td>
+            <td class="py-3 px-4">
+              <div class="font-semibold text-slate-900 text-xs">{{ f.title }}</div>
+              <div class="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{{ f.description }}</div>
+              {% if f.remediation %}
+              <div class="text-[10px] text-emerald-700 mt-1 font-medium bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                Remediation: {{ f.remediation }}
+              </div>
+              {% endif %}
+            </td>
+            <td class="py-3 px-4">
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 uppercase">
+                {{ f.detection_source }}
+              </span>
+            </td>
+            <td class="py-3 px-4">
+              <span class="inline-flex items-center text-[11px] font-medium text-emerald-700">
+                <span class="w-1.5 h-1.5 mr-1 bg-emerald-500 rounded-full"></span>
+                {{ f.verification_status }}
+              </span>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="py-12 text-center text-slate-400">
+              No vulnerability findings matching the specified criteria.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+

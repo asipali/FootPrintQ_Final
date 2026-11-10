@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Investigation Reports — FootprintIQ{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Security Reports & Deliverables</h1>
+      <p class="text-sm text-slate-500 mt-1">Generate and download comprehensive executive PDF reports</p>
+    </div>
+  </div>
+
+  <!-- Generate Report Card -->
+  <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <h2 class="text-base font-semibold text-slate-900">Executive PDF Investigation Report</h2>
+        <p class="text-xs text-slate-500 mt-1">
+          Compiles executive summary, exposure score, authorized scope, passive recon, Nmap/NSE findings, Greenbone/Nessus results, SHA-256 evidence, and remediation guidance.
+        </p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="generateReport()" id="btnGen"
+                class="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg text-sm shadow-sm transition">
+          Generate New PDF Report
+        </button>
+        <a href="/api/v1/reports/download"
+           class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-medium px-4 py-2 rounded-lg text-sm transition">
+          Download Latest PDF
+        </a>
+      </div>
+    </div>
+    <div id="genStatus" class="mt-4 hidden p-3 rounded-lg text-sm"></div>
+  </div>
+
+</div>
+
+<script>
+async function generateReport() {
+  const btn = document.getElementById('btnGen');
+  const status = document.getElementById('genStatus');
+  btn.disabled = true;
+  btn.innerText = 'Generating PDF...';
+  status.className = 'mt-4 p-3 rounded-lg text-sm bg-blue-50 text-blue-800 border border-blue-200 block';
+  status.innerText = 'Compiling findings, evidence hashes, and exposure metrics into PDF document...';
+
+  try {
+    const res = await fetch('/api/v1/reports/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ investigation_id: 'INV-20261110-001' })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      status.className = 'mt-4 p-3 rounded-lg text-sm bg-emerald-50 text-emerald-800 border border-emerald-200 block';
+      status.innerHTML = `Report generated successfully: <b>${data.file_name}</b> (${data.findings_included} findings included). <a href="/api/v1/reports/download" class="underline font-bold ml-2">Click to Download PDF</a>`;
+      btn.disabled = false;
+      btn.innerText = 'Generate New PDF Report';
+    } else {
+      status.className = 'mt-4 p-3 rounded-lg text-sm bg-rose-50 text-rose-800 border border-rose-200 block';
+      status.innerText = 'Report generation failed: ' + JSON.stringify(data);
+      btn.disabled = false;
+      btn.innerText = 'Generate New PDF Report';
+    }
+  } catch (err) {
+    status.className = 'mt-4 p-3 rounded-lg text-sm bg-rose-50 text-rose-800 border border-rose-200 block';
+    status.innerText = 'Error: ' + err.message;
+    btn.disabled = false;
+    btn.innerText = 'Generate New PDF Report';
+  }
+}
+</script>
+{% endblock %}
+
