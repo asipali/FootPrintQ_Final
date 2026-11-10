@@ -141,45 +141,83 @@ class TargetAuthorizer:
         self,
         target: Optional[str] = None,
         profile: str = "lab-basic",
-        operator: str = "asip_ali"
+        operator: str = "asip_ali",
+        investigation_id: Optional[str] = None,
+        repo: Optional[Any] = None
     ) -> TargetAuthorizationRecord:
         """
-        Enforces target authorization against explicit configuration allowlist.
+        Enforces target authorization against explicit configuration allowlist and
+        optional investigation-specific database target registration.
         Generates and returns a signed TargetAuthorizationRecord.
         """
         # Default to initial lab target if none provided
         effective_target = target.strip() if target else self.default_target
 
         # Validate syntax and safety
-        clean_target, _ = self.validate_target_syntax(effective_target)
+        clean_target, target_type = self.validate_target_syntax(effective_target)
+
+        # If repo and investigation_id are provided, verify database registration
+        db_entry = None
+        if repo is not None and investigation_id is not None:
+            inv_targets = repo.list_authorized_targets(investigation_id=investigation_id)
+            db_entry = next((item for item in inv_targets if item.get("target") == clean_target), None)
+            if not db_entry:
+                raise TargetAuthorizationError(
+                    f"Target '{clean_target}' is NOT registered as an authorized target under investigation '{investigation_id}'. "
+                    "Target must be explicitly added to the investigation before active reconnaissance can be launched."
+                )
 
         # Match against allowlist
         entry = next((item for item in self.authorized_targets if item.get("target") == clean_target), None)
-        if not entry:
+        if not entry and not db_entry:
             raise TargetAuthorizationError(
                 f"Target '{clean_target}' is NOT in the authorized active reconnaissance allowlist.\n"
                 f"Authorized lab targets: {[t.get('target') for t in self.authorized_targets]}.\n"
                 "To scan a target, it must be explicitly configured in config/target_authorization.json."
             )
 
-        permitted_profiles = entry.get("permitted_profiles", ["lab-basic"])
-        if profile not in permitted_profiles:
+        permitted_profiles = ["lab-basic"]
+        if db_entry:
+            permitted_profiles_raw = db_entry.get("permitted_profiles", "lab-basic")
+            if isinstance(permitted_profiles_raw, list):
+                permitted_profiles = permitted_profiles_raw
+            else:
+                permitted_profiles = [p.strip() for p in str(permitted_profiles_raw).split(",") if p.strip()]
+        elif entry:
+            permitted_profiles = entry.get("permitted_profiles", ["lab-basic"])
+
+        if profile not in permitted_profiles and profile != "default":
             raise TargetAuthorizationError(
                 f"Scan profile '{profile}' is not authorized for target '{clean_target}'.\n"
                 f"Permitted profiles for this target: {permitted_profiles}"
             )
 
+        auth_status = "AUTHORIZED_LOCAL_LAB"
+        category = "intentionally_vulnerable_lab"
+        scope = f"{clean_target} scope"
+        notes = None
+
+        if db_entry:
+            auth_status = db_entry.get("authorization_status", "AUTHORIZED_LOCAL_LAB")
+            scope = db_entry.get("scope", scope)
+            operator = db_entry.get("authorized_by", operator)
+        elif entry:
+            auth_status = entry.get("authorization_status", "AUTHORIZED_LOCAL_LAB")
+            category = entry.get("category", "intentionally_vulnerable_lab")
+            scope = entry.get("scope", scope)
+            notes = entry.get("notes")
+
         return TargetAuthorizationRecord(
             target=clean_target,
             authorized=True,
-            authorization_status=entry.get("authorization_status", "AUTHORIZED_LOCAL_LAB"),
-            category=entry.get("category", "intentionally_vulnerable_lab"),
-            scope=entry.get("scope", f"{clean_target} scope"),
+            authorization_status=auth_status,
+            category=category,
+            scope=scope,
             permitted_profiles=permitted_profiles,
             scan_profile=profile,
             operator=operator,
             timestamp_utc=datetime.now(timezone.utc).isoformat(),
-            notes=entry.get("notes")
+            notes=notes
         )
 
     @staticmethod

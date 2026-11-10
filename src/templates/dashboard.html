@@ -1,23 +1,30 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — FootprintIQ{% endblock %}
+{% block title %}Dashboard — FootprintIQ Enterprise{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-6 max-w-7xl mx-auto">
 
-  <!-- Welcome / Scope Banner -->
-  <div class="bg-gradient-to-r from-blue-900 to-indigo-900 rounded-xl p-6 text-white shadow-md">
+  <!-- Scope Banner -->
+  <div class="fiq-card p-6 border-l-4 border-l-blue-600 bg-white reveal-on-scroll">
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold">Investigation Intelligence Dashboard</h1>
-        <p class="text-blue-200 text-sm mt-1">
-          Active authorized target: <span class="font-semibold text-white">192.168.56.111</span> (Metasploitable2 Lab VM) &bull; Mode: Strict Target Authorization
+        <div class="flex items-center space-x-2">
+          <span class="px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase rounded bg-blue-100 text-blue-800">
+            Active Scope Authorized
+          </span>
+          <span class="text-xs text-slate-400">&bull; Local VirtualBox Lab</span>
+        </div>
+        <h1 class="text-xl font-bold text-slate-900 mt-1">Investigation Intelligence Dashboard</h1>
+        <p class="text-xs text-slate-500 mt-0.5">
+          Primary Authorized Lab Target: <span class="mono font-semibold text-slate-800">192.168.56.111</span> (Metasploitable2) &bull; Fail-Closed Security Policy
         </p>
       </div>
-      <div class="flex items-center gap-3">
-        <a href="/scans" class="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg text-sm shadow-sm transition">
+
+      <div class="flex items-center space-x-3">
+        <a href="/scans" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow-sm transition">
           Launch New Scan
         </a>
-        <a href="/reports" class="bg-white/10 hover:bg-white/20 text-white font-medium px-4 py-2 rounded-lg text-sm transition">
+        <a href="/reports" class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg transition">
           Download PDF Report
         </a>
       </div>
@@ -27,153 +34,173 @@
   <!-- KPI Metrics Grid -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
     <!-- Exposure Score -->
-    <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+    <div class="fiq-card fiq-card-interactive p-5 reveal-on-scroll stagger-1">
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Exposure Score</span>
-        <span class="px-2 py-0.5 text-xs font-bold rounded {% if exposure.exposure_score >= 80 %}bg-rose-100 text-rose-800{% elif exposure.exposure_score >= 50 %}bg-amber-100 text-amber-800{% else %}bg-emerald-100 text-emerald-800{% endif %}">
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Exposure Score</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold rounded {% if exposure.exposure_score >= 80 %}badge-critical{% elif exposure.exposure_score >= 50 %}badge-high{% elif exposure.exposure_score >= 25 %}badge-medium{% else %}badge-low{% endif %}">
           {{ exposure.exposure_level }}
         </span>
       </div>
-      <div class="mt-3 flex items-baseline gap-2">
+      <div class="mt-3 flex items-baseline space-x-2">
         <span class="text-3xl font-extrabold text-slate-900">{{ exposure.exposure_score }}</span>
-        <span class="text-sm text-slate-500">/ 100</span>
+        <span class="text-xs font-medium text-slate-400">/ 100</span>
       </div>
-      <p class="text-xs text-slate-400 mt-2">Aggregate multi-scanner risk calculation</p>
+      <div class="mt-2 text-[11px] text-slate-500">
+        Aggregate multi-scanner risk index
+      </div>
     </div>
 
-    <!-- Total Vulnerabilities -->
-    <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+    <!-- Total Correlated Findings -->
+    <div class="fiq-card fiq-card-interactive p-5 reveal-on-scroll stagger-2">
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Vulnerabilities</span>
-        <span class="px-2 py-0.5 text-xs font-bold bg-blue-100 text-blue-800 rounded">Correlated</span>
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Vulnerabilities</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold rounded bg-blue-50 text-blue-700 border border-blue-200">
+          Correlated
+        </span>
       </div>
-      <div class="mt-3 flex items-baseline gap-2">
+      <div class="mt-3 flex items-baseline space-x-2">
         <span class="text-3xl font-extrabold text-slate-900">{{ total_findings }}</span>
-        <span class="text-xs text-rose-600 font-semibold">{{ exposure.severity_counts.Critical }} Critical</span>
+        <span class="text-xs font-bold text-rose-600">{{ exposure.severity_counts.Critical }} Critical</span>
       </div>
-      <p class="text-xs text-slate-400 mt-2">{{ exposure.severity_counts.High }} High &bull; {{ exposure.severity_counts.Medium }} Medium</p>
+      <div class="mt-2 text-[11px] text-slate-500">
+        {{ exposure.severity_counts.High }} High &bull; {{ exposure.severity_counts.Medium }} Medium &bull; {{ exposure.severity_counts.Low }} Low
+      </div>
     </div>
 
     <!-- Active Investigations -->
-    <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+    <div class="fiq-card fiq-card-interactive p-5 reveal-on-scroll stagger-3">
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Investigations</span>
-        <span class="px-2 py-0.5 text-xs font-bold bg-slate-100 text-slate-700 rounded">Active</span>
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Investigations</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold rounded bg-slate-100 text-slate-700">
+          Managed
+        </span>
       </div>
-      <div class="mt-3 flex items-baseline gap-2">
+      <div class="mt-3 flex items-baseline space-x-2">
         <span class="text-3xl font-extrabold text-slate-900">{{ total_investigations }}</span>
-        <span class="text-sm text-slate-500">Investigations</span>
+        <span class="text-xs font-medium text-slate-500">Campaigns</span>
       </div>
-      <p class="text-xs text-slate-400 mt-2">{{ total_targets }} Authorized Assets Registered</p>
+      <div class="mt-2 text-[11px] text-slate-500">
+        {{ total_targets }} Authorized Assets Registered
+      </div>
     </div>
 
-    <!-- Scans Executed -->
-    <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+    <!-- Executed Scans & Evidence -->
+    <div class="fiq-card fiq-card-interactive p-5 reveal-on-scroll stagger-4">
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Scans Executed</span>
-        <span class="px-2 py-0.5 text-xs font-bold bg-emerald-100 text-emerald-800 rounded">Multi-Engine</span>
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Scans Executed</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+          Multi-Engine
+        </span>
       </div>
-      <div class="mt-3 flex items-baseline gap-2">
+      <div class="mt-3 flex items-baseline space-x-2">
         <span class="text-3xl font-extrabold text-slate-900">{{ total_scans }}</span>
-        <span class="text-xs text-emerald-600 font-semibold">100% Completed</span>
+        <span class="text-xs font-bold text-emerald-600">Active Pipeline</span>
       </div>
-      <p class="text-xs text-slate-400 mt-2">{{ total_evidence }} Evidence Files in SeaweedFS</p>
+      <div class="mt-2 text-[11px] text-slate-500">
+        {{ total_evidence }} Evidence Records in SeaweedFS
+      </div>
     </div>
   </div>
 
-  <!-- Scanner Health & Status Grid -->
-  <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-    <h2 class="text-base font-semibold text-slate-900 mb-4">Core Infrastructure & Scanner Engine Status</h2>
+  <!-- Core Infrastructure & Scanner Engines Status -->
+  <div class="fiq-card p-6 reveal-on-scroll">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-sm font-bold text-slate-900">Multi-Scanner Engines &amp; Core Infrastructure</h2>
+        <p class="text-xs text-slate-500">Real-time status of data store, object storage, and vulnerability scanners</p>
+      </div>
+      <button onclick="openHealthModal()" class="text-xs text-blue-600 hover:text-blue-800 font-semibold">
+        Run Full Diagnostic &rarr;
+      </button>
+    </div>
+
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <!-- SQL Server -->
-      <div class="p-4 rounded-lg border border-slate-100 bg-slate-50/50">
+      <!-- SQL Server 2022 -->
+      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
         <div class="flex items-center justify-between">
-          <span class="font-medium text-sm text-slate-800">SQL Server 2022</span>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-            Active
-          </span>
+          <span class="text-xs font-bold text-slate-800">SQL Server 2022</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">Active</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Dialect: mssql+pymssql</p>
-        <p class="text-xs text-slate-400 mt-1">Identity & ORM Migrations Ready</p>
+        <p class="text-[11px] text-slate-500 mt-1.5">Dialect: mssql+pymssql</p>
+        <p class="text-[10px] text-slate-400">Strict Relational Store</p>
       </div>
 
       <!-- SeaweedFS -->
-      <div class="p-4 rounded-lg border border-slate-100 bg-slate-50/50">
+      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
         <div class="flex items-center justify-between">
-          <span class="font-medium text-sm text-slate-800">SeaweedFS Storage</span>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-            Active (9333)
-          </span>
+          <span class="text-xs font-bold text-slate-800">SeaweedFS Storage</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">Online (9333)</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Master + Volume Ready</p>
-        <p class="text-xs text-slate-400 mt-1">SHA-256 Verified Evidence</p>
+        <p class="text-[11px] text-slate-500 mt-1.5">Distributed Volumes: 8080</p>
+        <p class="text-[10px] text-slate-400">SHA-256 Verified Records</p>
       </div>
 
-      <!-- Nmap / NSE -->
-      <div class="p-4 rounded-lg border border-slate-100 bg-slate-50/50">
+      <!-- Nmap & NSE -->
+      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
         <div class="flex items-center justify-between">
-          <span class="font-medium text-sm text-slate-800">Nmap & NSE</span>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-            Online
-          </span>
+          <span class="text-xs font-bold text-slate-800">Nmap &amp; NSE Engine</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">Online</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Version: 7.95 (SYN/NSE)</p>
-        <p class="text-xs text-slate-400 mt-1">Policy Service Enforced</p>
+        <p class="text-[11px] text-slate-500 mt-1.5">Version: 7.95 (SYN/NSE)</p>
+        <p class="text-[10px] text-slate-400">Policy Service Enforced</p>
       </div>
 
       <!-- Greenbone / OpenVAS -->
-      <div class="p-4 rounded-lg border border-slate-100 bg-slate-50/50">
+      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
         <div class="flex items-center justify-between">
-          <span class="font-medium text-sm text-slate-800">Greenbone / OpenVAS</span>
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-            GMP Active
-          </span>
+          <span class="text-xs font-bold text-slate-800">Greenbone / OpenVAS</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-800">GMP Ready</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Socket: /run/gvmd/gvmd.sock</p>
-        <p class="text-xs text-slate-400 mt-1">VT Cache: 202611070548</p>
+        <p class="text-[11px] text-slate-500 mt-1.5">Socket: /run/gvmd/gvmd.sock</p>
+        <p class="text-[10px] text-slate-400">SCAP/VT Feed Integrated</p>
       </div>
     </div>
   </div>
 
-  <!-- Recent Vulnerabilities & Scans Two-Column Section -->
+  <!-- Two-Column Section: Top Prioritized Findings & Recent Scans -->
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
     <!-- Top Prioritized Vulnerabilities -->
-    <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <div class="lg:col-span-2 fiq-card p-6 reveal-on-scroll">
       <div class="flex items-center justify-between mb-4">
         <div>
-          <h2 class="text-base font-semibold text-slate-900">Top Prioritized Findings</h2>
-          <p class="text-xs text-slate-500">Correlated across scanner engines with confidence scoring</p>
+          <h2 class="text-sm font-bold text-slate-900">Top Prioritized Vulnerability Findings</h2>
+          <p class="text-xs text-slate-500">Cross-engine findings correlated by confidence and severity</p>
         </div>
-        <a href="/findings" class="text-xs font-medium text-blue-600 hover:text-blue-800">View all &rarr;</a>
+        <a href="/findings" class="text-xs font-semibold text-blue-600 hover:text-blue-800">
+          View All Findings &rarr;
+        </a>
       </div>
 
       <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs">
-          <thead class="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider">
+        <table class="fiq-table">
+          <thead>
             <tr>
-              <th class="py-2.5 px-3">Target / Port</th>
-              <th class="py-2.5 px-3">Severity</th>
-              <th class="py-2.5 px-3">CVE</th>
-              <th class="py-2.5 px-3">Vulnerability Title</th>
-              <th class="py-2.5 px-3">Source</th>
+              <th>Target / Port</th>
+              <th>Severity</th>
+              <th>CVE</th>
+              <th>Vulnerability Title</th>
+              <th>Source</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-100">
+          <tbody>
             {% for f in findings[:6] %}
-            <tr class="hover:bg-slate-50/60 transition">
-              <td class="py-3 px-3 mono font-medium text-slate-700">{{ f.target_ip }}:{{ f.port or 'all' }}</td>
-              <td class="py-3 px-3">
-                <span class="px-2 py-0.5 rounded font-bold text-xs {% if f.severity == 'Critical' %}bg-rose-100 text-rose-800{% elif f.severity == 'High' %}bg-orange-100 text-orange-800{% elif f.severity == 'Medium' %}bg-amber-100 text-amber-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+            <tr>
+              <td class="mono font-semibold text-slate-800">{{ f.target_ip }}:{{ f.port or 'all' }}</td>
+              <td>
+                <span class="px-2 py-0.5 rounded font-bold text-[11px] {% if f.severity == 'Critical' %}badge-critical{% elif f.severity == 'High' %}badge-high{% elif f.severity == 'Medium' %}badge-medium{% else %}badge-info{% endif %}">
                   {{ f.severity }}
                 </span>
               </td>
-              <td class="py-3 px-3 mono text-slate-600 font-semibold">{{ f.cve_identifiers or '—' }}</td>
-              <td class="py-3 px-3 font-medium text-slate-900 max-w-xs truncate">{{ f.title }}</td>
-              <td class="py-3 px-3 text-slate-500 capitalize">{{ f.detection_source }}</td>
+              <td class="mono text-xs font-semibold text-blue-700">{{ f.cve_identifiers or '—' }}</td>
+              <td class="font-medium text-slate-900 max-w-xs truncate" title="{{ f.title }}">{{ f.title }}</td>
+              <td class="capitalize text-slate-500 font-medium">{{ f.detection_source }}</td>
             </tr>
             {% else %}
             <tr>
-              <td colspan="5" class="py-8 text-center text-slate-400">No vulnerabilities recorded yet. Launch a scan below.</td>
+              <td colspan="5" class="py-8 text-center text-slate-400">
+                No vulnerability findings recorded yet. Launch a scan to populate.
+              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -182,31 +209,40 @@
     </div>
 
     <!-- Recent Scans Sidebar -->
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <div class="fiq-card p-6 reveal-on-scroll">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-base font-semibold text-slate-900">Recent Scans</h2>
-        <a href="/scans" class="text-xs font-medium text-blue-600 hover:text-blue-800">Launch &rarr;</a>
+        <div>
+          <h2 class="text-sm font-bold text-slate-900">Recent Scans</h2>
+          <p class="text-xs text-slate-500">Multi-engine executions</p>
+        </div>
+        <a href="/scans" class="text-xs font-semibold text-blue-600 hover:text-blue-800">
+          History &rarr;
+        </a>
       </div>
 
       <div class="space-y-3">
         {% for s in scans[:5] %}
-        <div class="p-3 rounded-lg border border-slate-100 hover:border-slate-200 transition bg-slate-50/30">
+        <div class="p-3 rounded-lg border border-slate-200 bg-slate-50/50 hover:border-slate-300 transition">
           <div class="flex items-center justify-between">
-            <span class="mono font-semibold text-xs text-slate-800">{{ s.scan_id }}</span>
-            <span class="px-2 py-0.5 text-xs font-medium rounded bg-emerald-100 text-emerald-800 capitalize">{{ s.status }}</span>
+            <span class="mono text-xs font-bold text-slate-800 truncate max-w-[130px]" title="{{ s.scan_id }}">{{ s.scan_id }}</span>
+            <span class="px-2 py-0.5 text-[10px] font-bold rounded {% if s.status == 'completed' %}badge-low{% elif s.status == 'failed' %}badge-critical{% else %}badge-info{% endif %} capitalize">
+              {{ s.status }}
+            </span>
           </div>
-          <div class="mt-2 flex items-center justify-between text-xs text-slate-500">
-            <span>{{ s.target }}</span>
-            <span class="capitalize font-medium text-slate-700">{{ s.scan_type }}</span>
+          <div class="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+            <span class="mono">{{ s.target }}</span>
+            <span class="capitalize font-semibold text-slate-700">{{ s.scan_type|replace('_', ' ') }}</span>
           </div>
         </div>
         {% else %}
-        <p class="text-xs text-slate-400 text-center py-6">No scan records yet.</p>
+        <div class="py-8 text-center text-slate-400 text-xs">
+          No scan records found.
+        </div>
         {% endfor %}
       </div>
     </div>
+
   </div>
 
 </div>
 {% endblock %}
-

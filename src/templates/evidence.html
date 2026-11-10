@@ -1,65 +1,69 @@
 {% extends "base.html" %}
-{% block title %}Evidence Management (SeaweedFS) — FootprintIQ{% endblock %}
+{% block title %}Evidence Management (SeaweedFS) — FootprintIQ Enterprise{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-6 max-w-7xl mx-auto">
 
-  <div class="flex items-center justify-between">
+  <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
     <div>
-      <h1 class="text-2xl font-bold text-slate-900">SeaweedFS Evidence Catalog</h1>
-      <p class="text-sm text-slate-500 mt-1">Cryptographic integrity preservation (SHA-256) & distributed object storage references</p>
+      <h1 class="text-xl font-bold text-slate-900">SeaweedFS Cryptographic Evidence Catalog</h1>
+      <p class="text-xs text-slate-500 mt-0.5">Distributed object storage preservation of raw tool outputs with SHA-256 checksums</p>
     </div>
-    <div class="flex items-center gap-2">
-      <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-100 text-emerald-800">
-        SeaweedFS Master Online (Port 9333)
+    <div class="flex items-center space-x-2">
+      <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+        <span class="w-2 h-2 mr-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+        SeaweedFS Cluster Online (9333 / 8080)
       </span>
     </div>
   </div>
 
-  <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-6">
+  <!-- Evidence Table Card -->
+  <div class="fiq-card p-6 reveal-on-scroll">
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-xs">
-        <thead class="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider border-b border-slate-200">
+      <table class="fiq-table">
+        <thead>
           <tr>
-            <th class="py-3 px-4">Evidence ID</th>
-            <th class="py-3 px-4">File Name / Type</th>
-            <th class="py-3 px-4">Size</th>
-            <th class="py-3 px-4">SHA-256 Cryptographic Checksum</th>
-            <th class="py-3 px-4">SeaweedFS File ID (FID)</th>
-            <th class="py-3 px-4">Actions</th>
+            <th>Evidence ID</th>
+            <th>File Name &amp; Artifact Type</th>
+            <th>Size</th>
+            <th>SHA-256 Integrity Checksum</th>
+            <th>SeaweedFS File ID (FID)</th>
+            <th>Actions</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-100">
+        <tbody>
           {% for e in evidence %}
-          <tr class="hover:bg-slate-50/80 transition">
-            <td class="py-3 px-4 mono font-semibold text-slate-800">{{ e.evidence_id }}</td>
-            <td class="py-3 px-4">
-              <div class="font-medium text-slate-900">{{ e.file_name }}</div>
-              <span class="text-[10px] uppercase font-semibold text-slate-400">{{ e.evidence_type }}</span>
+          <tr>
+            <td class="mono font-bold text-slate-900 text-xs">{{ e.evidence_id }}</td>
+            <td>
+              <div class="font-semibold text-slate-900 text-xs">{{ e.file_name }}</div>
+              <span class="text-[10px] uppercase font-bold text-slate-400">{{ e.evidence_type }}</span>
             </td>
-            <td class="py-3 px-4 text-slate-600 font-medium">{{ e.file_size }} B</td>
-            <td class="py-3 px-4 mono text-[11px] text-slate-500 truncate max-w-xs" title="{{ e.sha256_hash }}">
+            <td class="text-slate-600 font-medium text-xs">{{ e.file_size }} B</td>
+            <td class="mono text-[11px] text-slate-500 truncate max-w-xs" title="{{ e.sha256_hash }}">
               {{ e.sha256_hash }}
             </td>
-            <td class="py-3 px-4">
+            <td>
               {% if e.seaweed_fid %}
               <span class="mono px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold text-[11px] border border-blue-200">
                 {{ e.seaweed_fid }}
               </span>
               {% else %}
-              <span class="text-slate-400">Local Cache</span>
+              <span class="text-slate-400 text-xs">Local Cache</span>
               {% endif %}
             </td>
-            <td class="py-3 px-4">
+            <td>
               <a href="/api/v1/evidence/{{ e.evidence_id }}/download"
-                 class="inline-flex items-center px-2.5 py-1 border border-slate-200 rounded text-xs font-medium text-blue-600 hover:bg-slate-50 transition">
-                Download Raw
+                 class="inline-flex items-center px-2.5 py-1 border border-slate-200 hover:border-slate-300 rounded text-xs font-semibold text-blue-600 hover:bg-slate-50 transition">
+                Download Raw &rarr;
               </a>
             </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="6" class="py-12 text-center text-slate-400">No evidence records cataloged yet.</td>
+            <td colspan="6" class="py-12 text-center text-slate-400">
+              No evidence records cataloged yet. Run an authorized scan to capture evidence.
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -69,4 +73,3 @@
 
 </div>
 {% endblock %}
-

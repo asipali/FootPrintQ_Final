@@ -76,6 +76,33 @@ class NmapCollectorResult:
         self.error_message = error_message
 
 
+def resolve_nmap_binary(specified_path: Optional[str] = None) -> str:
+    """Cross-platform binary resolution for Nmap across Linux and Windows."""
+    if specified_path and os.path.exists(specified_path):
+        return specified_path
+
+    env_path = os.getenv("NMAP_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    which_path = shutil.which("nmap") or shutil.which("nmap.exe")
+    if which_path:
+        return which_path
+
+    if os.name == "nt":
+        for win_path in [
+            r"C:\Program Files (x86)\Nmap\nmap.exe",
+            r"C:\Program Files\Nmap\nmap.exe"
+        ]:
+            if os.path.isfile(win_path):
+                return win_path
+
+    if os.path.exists("/usr/bin/nmap"):
+        return "/usr/bin/nmap"
+
+    return "nmap"
+
+
 class NmapCollector:
     """
     Executes controlled active Nmap reconnaissance with strict argument list isolation.
@@ -86,7 +113,7 @@ class NmapCollector:
         binary_path: Optional[str] = None,
         timeout: int = 60
     ):
-        self.binary_path = binary_path or shutil.which("nmap") or "/usr/bin/nmap"
+        self.binary_path = resolve_nmap_binary(binary_path)
         self.timeout = timeout
         self.version = self._detect_version()
 

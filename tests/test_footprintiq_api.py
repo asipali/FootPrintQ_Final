@@ -79,21 +79,139 @@ class TestFootprintIQAPI(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
+    def test_scan_investigation_scope_authorization(self):
+        # 1. Create investigation
+        inv_resp = self.client.post(
+            "/api/v1/investigations",
+            json={"title": "Scoped Scan Investigation", "description": "Testing scope containment"},
+            headers=self.headers
+        )
+        self.assertEqual(inv_resp.status_code, 201)
+        inv_id = inv_resp.json()["investigation_id"]
+
+        # 2. Scanning 192.168.56.111 before it's registered under inv_id should fail with 403
+        scan_resp_unregistered = self.client.post(
+            "/api/v1/scans",
+            json={
+                "investigation_id": inv_id,
+                "scan_type": "network_discovery",
+                "target": "192.168.56.111"
+            },
+            headers=self.headers
+        )
+        self.assertEqual(scan_resp_unregistered.status_code, 403)
+        self.assertIn("NOT registered as an authorized target", scan_resp_unregistered.json()["detail"])
+
+        # 3. Add target to this investigation
+        tgt_resp = self.client.post(
+            "/api/v1/targets",
+            json={
+                "investigation_id": inv_id,
+                "target": "192.168.56.111",
+                "name": "Metasploitable2",
+                "scope": "Lab Subnet",
+                "permitted_profiles": "lab-basic,default"
+            },
+            headers=self.headers
+        )
+        self.assertEqual(tgt_resp.status_code, 201)
+
+        # 4. Now scan should be accepted and execute
+        scan_resp_ok = self.client.post(
+            "/api/v1/scans",
+            json={
+                "investigation_id": inv_id,
+                "scan_type": "network_discovery",
+                "target": "192.168.56.111",
+                "profile": "default"
+            },
+            headers=self.headers
+        )
+        self.assertEqual(scan_resp_ok.status_code, 200)
+        self.assertEqual(scan_resp_ok.json()["status"], "COMPLETED")
+
+    def test_reports_security_and_traversal_prevention(self):
+        # Test path traversal prevention
+        trav_resp = self.client.get("/api/v1/reports/..%2F..%2Fetc%2Fpasswd/download")
+        self.assertIn(trav_resp.status_code, [400, 403, 404])
+
+        # Test listing reports
+        list_resp = self.client.get("/api/v1/reports")
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertIsInstance(list_resp.json(), list)
+
     def test_dashboard_ui_html_response(self):
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("FootprintIQ", resp.text)
         self.assertIn("Investigation Intelligence Dashboard", resp.text)
+        self.assertIn("Scope Authorized", resp.text)
+
+    def test_all_ui_views_and_static_assets(self):
+        # 1. Investigations view
+        inv_ui = self.client.get("/investigations")
+        self.assertEqual(inv_ui.status_code, 200)
+        self.assertIn("Investigations &amp; Scope Containment", inv_ui.text)
+
+        # 2. Scans view
+        scans_ui = self.client.get("/scans")
+        self.assertEqual(scans_ui.status_code, 200)
+        self.assertIn("Reconnaissance &amp; Vulnerability Scans", scans_ui.text)
+
+        # 3. Findings view
+        findings_ui = self.client.get("/findings")
+        self.assertEqual(findings_ui.status_code, 200)
+        self.assertIn("Vulnerability Findings &amp; Correlation", findings_ui.text)
+
+        # 4. Evidence view
+        evidence_ui = self.client.get("/evidence")
+        self.assertEqual(evidence_ui.status_code, 200)
+        self.assertIn("SeaweedFS Cryptographic Evidence Catalog", evidence_ui.text)
+
+        # 5. Reports view
+        reports_ui = self.client.get("/reports")
+        self.assertEqual(reports_ui.status_code, 200)
+        self.assertIn("Security Reports &amp; Executive Deliverables", reports_ui.text)
+
+        # 6. Static CSS asset
+        css_resp = self.client.get("/static/css/app.css")
+        self.assertEqual(css_resp.status_code, 200)
+        self.assertIn("prefers-reduced-motion", css_resp.text)
+        self.assertIn("reveal-on-scroll", css_resp.text)
+
+        # 7. Static JS asset
+        js_resp = self.client.get("/static/js/app.js")
+        self.assertEqual(js_resp.status_code, 200)
+        self.assertIn("IntersectionObserver", js_resp.text)
 
     def test_reports_generation_and_download(self):
+        # 1. Nonexistent investigation must yield 404
+        bad_resp = self.client.post(
+            "/api/v1/reports/generate",
+            json={"investigation_id": "INV-NONEXISTENT-999"},
+            headers=self.headers
+        )
+        self.assertEqual(bad_resp.status_code, 404)
+
+        # 2. Create valid investigation
+        inv_resp = self.client.post(
+            "/api/v1/investigations",
+            json={"title": "Report Testing Investigation", "description": "Unit test report generation"},
+            headers=self.headers
+        )
+        self.assertEqual(inv_resp.status_code, 201)
+        inv_id = inv_resp.json()["investigation_id"]
+
+        # 3. Generate report
         gen_resp = self.client.post(
             "/api/v1/reports/generate",
-            json={"investigation_id": "INV-DEFAULT"},
+            json={"investigation_id": inv_id},
             headers=self.headers
         )
         self.assertEqual(gen_resp.status_code, 201)
         self.assertTrue(gen_resp.json()["pdf_report_path"].endswith(".pdf"))
 
+        # 4. Download latest report
         dl_resp = self.client.get("/api/v1/reports/download")
         self.assertEqual(dl_resp.status_code, 200)
         self.assertEqual(dl_resp.headers["content-type"], "application/pdf")

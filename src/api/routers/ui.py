@@ -10,6 +10,8 @@ Renders Jinja2 HTML templates for:
 """
 
 import os
+import re
+from datetime import datetime
 from fastapi import APIRouter, Request, Depends
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -20,9 +22,30 @@ from src.services.exposure_scoring import ExposureScoringEngine
 from src.api.dependencies import get_repository
 
 TEMPLATES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "templates"))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPORTS_DIR = os.path.join(PROJECT_ROOT, "reports")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 router = APIRouter(include_in_schema=False)
+
+
+def _get_existing_reports():
+    reports = []
+    if os.path.exists(REPORTS_DIR):
+        for f in sorted(os.listdir(REPORTS_DIR), reverse=True):
+            if f.endswith(".pdf"):
+                full_path = os.path.join(REPORTS_DIR, f)
+                stat = os.stat(full_path)
+                match = re.search(r"FootprintIQ_Report_([A-Za-z0-9_-]+)_\d+", f)
+                inv_id = match.group(1) if match else "UNKNOWN"
+                reports.append({
+                    "file_name": f,
+                    "investigation_id": inv_id,
+                    "file_size": stat.st_size,
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S"),
+                    "download_url": f"/api/v1/reports/{f}/download"
+                })
+    return reports
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -46,6 +69,8 @@ def view_dashboard(request: Request, repo: FootprintIQRepository = Depends(get_r
             "total_findings": len(findings),
             "total_evidence": len(evidence),
             "total_targets": len(targets),
+            "investigations": investigations,
+            "targets": targets,
             "findings": findings,
             "scans": list(reversed(scans))
         }
@@ -55,12 +80,14 @@ def view_dashboard(request: Request, repo: FootprintIQRepository = Depends(get_r
 @router.get("/investigations", response_class=HTMLResponse)
 def view_investigations(request: Request, repo: FootprintIQRepository = Depends(get_repository)):
     investigations = repo.list_investigations()
+    targets = repo.list_authorized_targets()
     return templates.TemplateResponse(
         request=request,
         name="investigations.html",
         context={
             "active_page": "investigations",
-            "investigations": list(reversed(investigations))
+            "investigations": list(reversed(investigations)),
+            "targets": targets
         }
     )
 
@@ -68,12 +95,16 @@ def view_investigations(request: Request, repo: FootprintIQRepository = Depends(
 @router.get("/scans", response_class=HTMLResponse)
 def view_scans(request: Request, repo: FootprintIQRepository = Depends(get_repository)):
     scans = repo.list_scans()
+    investigations = repo.list_investigations()
+    targets = repo.list_authorized_targets()
     return templates.TemplateResponse(
         request=request,
         name="scans.html",
         context={
             "active_page": "scans",
-            "scans": list(reversed(scans))
+            "scans": list(reversed(scans)),
+            "investigations": investigations,
+            "targets": targets
         }
     )
 
@@ -85,12 +116,16 @@ def view_findings(
     repo: FootprintIQRepository = Depends(get_repository)
 ):
     findings = repo.list_findings(severity=severity)
+    all_findings = repo.list_findings()
+    exposure_summary = ExposureScoringEngine.calculate_investigation_exposure(all_findings)
     return templates.TemplateResponse(
         request=request,
         name="findings.html",
         context={
             "active_page": "findings",
             "findings": findings,
+            "total_findings": len(all_findings),
+            "exposure": exposure_summary,
             "selected_severity": severity
         }
     )
@@ -104,17 +139,24 @@ def view_evidence(request: Request, repo: FootprintIQRepository = Depends(get_re
         name="evidence.html",
         context={
             "active_page": "evidence",
-            "evidence": list(reversed(evidence))
+            "evidence": list(reversed(evidence)),
+            "total_evidence": len(evidence)
         }
     )
 
 
 @router.get("/reports", response_class=HTMLResponse)
-def view_reports(request: Request):
+def view_reports(request: Request, repo: FootprintIQRepository = Depends(get_repository)):
+    investigations = repo.list_investigations()
+    reports = _get_existing_reports()
+    findings = repo.list_findings()
     return templates.TemplateResponse(
         request=request,
         name="reports.html",
         context={
-            "active_page": "reports"
+            "active_page": "reports",
+            "investigations": investigations,
+            "reports": reports,
+            "total_findings": len(findings)
         }
     )

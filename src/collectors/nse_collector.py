@@ -16,6 +16,7 @@ import hashlib
 from src.authorization.target_authorizer import TargetAuthorizer
 from src.services.nse_policy_service import NSEPolicyService, APPROVED_NSE_SCRIPTS
 from src.storage.seaweedfs_client import SeaweedFSClient
+from src.collectors.nmap_collector import resolve_nmap_binary
 
 logger = logging.getLogger("FootprintIQ.NSECollector")
 
@@ -63,7 +64,7 @@ class NSECollector:
         xml_path = os.path.join(xml_dir, f"nse_{safe_target}_{timestamp}.xml")
 
         cmd = [
-            "nmap",
+            resolve_nmap_binary(),
             "-sV",
             "--script", script_arg,
             "-oX", xml_path,

@@ -297,23 +297,49 @@ class UnifiedScanOrchestrator:
         1. Nmap Service Detection
         2. Nmap NSE Vulnerability Checks
         3. Nessus Assessment
-        4. Greenbone / OpenVAS Assessment (if feed/daemon is ready)
+        4. Greenbone / OpenVAS Assessment (if feed/daemon is operational)
         Correlates all findings and calculates exposure score.
         """
         all_findings = []
+        scanners_executed = []
+        scanners_skipped = []
 
         # 1. Nmap Services
         services_res = self._run_nmap_services(target, profile, investigation_id, scan_id)
+        scanners_executed.append("nmap_services")
 
         # 2. NSE Vulnerability Checks
         nse_res = self._run_nmap_nse(target, custom_scripts, investigation_id, scan_id)
         all_findings.extend(nse_res.get("findings", []))
+        scanners_executed.append("nmap_nse")
 
         # 3. Nessus
         nessus_res = self._run_nessus(target, investigation_id, scan_id)
         all_findings.extend(nessus_res.get("findings", []))
+        scanners_executed.append("nessus")
 
-        # 4. Exposure scoring and correlation
+        # 4. Greenbone / OpenVAS (probe readiness before invoking)
+        greenbone_status = "UNAVAILABLE"
+        try:
+            gb_collector = GreenboneCollector()
+            is_ready, details = gb_collector.check_readiness()
+            if is_ready:
+                gb_res = self._run_greenbone(target, investigation_id, scan_id)
+                all_findings.extend(gb_res.get("findings", []))
+                scanners_executed.append("greenbone")
+                greenbone_status = "ONLINE"
+            elif details.get("connected"):
+                greenbone_status = "FEED_SYNCING"
+                scanners_skipped.append({"scanner": "greenbone", "reason": "Feed synchronization in progress"})
+            else:
+                greenbone_status = "OFFLINE"
+                scanners_skipped.append({"scanner": "greenbone", "reason": "GMP socket unavailable or daemon stopped"})
+        except Exception as e:
+            logger.warning(f"Combined scan Greenbone integration check skipped: {e}")
+            greenbone_status = "DEGRADED"
+            scanners_skipped.append({"scanner": "greenbone", "reason": str(e)})
+
+        # 5. Exposure scoring and correlation
         exposure_report = ExposureScoringEngine.calculate_investigation_exposure(all_findings)
         self.repo.update_exposure_score(investigation_id, exposure_report["exposure_score"])
 
@@ -321,7 +347,9 @@ class UnifiedScanOrchestrator:
             "status": "COMPLETED",
             "scan_type": "combined",
             "target": target,
-            "scanners_executed": ["nmap_services", "nmap_nse", "nessus"],
+            "scanners_executed": scanners_executed,
+            "scanners_skipped": scanners_skipped,
+            "greenbone_status": greenbone_status,
             "vulnerabilities_found": len(all_findings),
             "findings": all_findings,
             "exposure_summary": exposure_report

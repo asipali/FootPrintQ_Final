@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 from src.db.repository import FootprintIQRepository
 from src.orchestration.unified_orchestrator import UnifiedScanOrchestrator
+from src.authorization.target_authorizer import TargetAuthorizationError
 from src.api.dependencies import get_repository, get_current_user
 
 router = APIRouter(prefix="/api/v1/scans", tags=["Scans"])
@@ -28,21 +29,50 @@ class LaunchScanRequest(BaseModel):
     custom_scripts: Optional[List[str]] = Field(None, example=["ftp-vsftpd-backdoor", "http-title"])
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED)
-@router.post("/", status_code=status.HTTP_202_ACCEPTED, include_in_schema=False)
+@router.post("", status_code=status.HTTP_200_OK)
+@router.post("/", status_code=status.HTTP_200_OK, include_in_schema=False)
 def launch_scan(
     req: LaunchScanRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
     orchestrator = UnifiedScanOrchestrator(repo=repo)
-    # Validate authorization upfront
+
+    # 1. Global target authorization & syntax safety check (Fail-closed upfront)
     if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "greenbone", "nessus", "combined"):
         try:
-            auth_rec = orchestrator.authorizer.authorize_target(req.target, profile=req.profile or "lab-basic")
+            auth_rec = orchestrator.authorizer.authorize_target(
+                req.target,
+                profile=req.profile or "lab-basic"
+            )
             if not auth_rec.authorized:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Target '{req.target}' is unauthorized: {auth_rec.failure_reason}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Target '{req.target}' is unauthorized: {getattr(auth_rec, 'failure_reason', 'Not authorized')}"
+                )
+        except TargetAuthorizationError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
         except Exception as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+    # 2. Verify investigation exists
+    inv = repo.get_investigation(req.investigation_id)
+    if not inv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Investigation '{req.investigation_id}' not found. Cannot launch scan."
+        )
+
+    # 3. Verify target is registered under this specific investigation
+    if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "greenbone", "nessus", "combined"):
+        try:
+            orchestrator.authorizer.authorize_target(
+                req.target,
+                profile=req.profile or "lab-basic",
+                investigation_id=req.investigation_id,
+                repo=repo
+            )
+        except TargetAuthorizationError as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
     try:
