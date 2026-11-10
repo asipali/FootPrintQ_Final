@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from src.db.models import (
     User, Investigation, Campaign, AuthorizedTarget,
     ScanExecution, VulnerabilityFinding, EvidenceRecord,
-    ReportRecord, AuditLog
+    ReportRecord, AuditLog, ReconCampaign, ScanExecutionEvent,
+    SavedScanProfile, RemediationHistory
 )
 from src.db.session import SessionLocal
 
@@ -34,6 +35,10 @@ class FootprintIQRepository:
     _shared_mem_evidence: Dict[str, Dict[str, Any]] = {}
     _shared_mem_reports: Dict[str, Dict[str, Any]] = {}
     _shared_mem_audit: List[Dict[str, Any]] = []
+    _shared_mem_recon_campaigns: Dict[str, Dict[str, Any]] = {}
+    _shared_mem_scan_events: Dict[str, List[Dict[str, Any]]] = {}
+    _shared_mem_profiles: Dict[str, Dict[str, Any]] = {}
+    _shared_mem_remediation: List[Dict[str, Any]] = []
 
     def __init__(self, db: Optional[Session] = None):
         self._db = db
@@ -45,6 +50,11 @@ class FootprintIQRepository:
         self._mem_evidence = FootprintIQRepository._shared_mem_evidence
         self._mem_reports = FootprintIQRepository._shared_mem_reports
         self._mem_audit = FootprintIQRepository._shared_mem_audit
+        self._mem_recon_campaigns = FootprintIQRepository._shared_mem_recon_campaigns
+        self._mem_scan_events = FootprintIQRepository._shared_mem_scan_events
+        self._mem_profiles = FootprintIQRepository._shared_mem_profiles
+        self._mem_remediation = FootprintIQRepository._shared_mem_remediation
+        self._init_builtin_profiles()
 
     def _get_db(self) -> Optional[Session]:
         if self._db is not None:
@@ -562,6 +572,9 @@ class FootprintIQRepository:
                         "detection_source": f.detection_source,
                         "scanner_vt_id": f.scanner_vt_id,
                         "remediation": f.remediation,
+                        "finding_status": getattr(f, "finding_status", "open"),
+                        "remediation_status": getattr(f, "finding_status", "open"),
+                        "remediation_notes": getattr(f, "remediation_notes", ""),
                         "verification_status": f.verification_status,
                         "first_detected": f.first_detected.isoformat()
                     } for f in findings]
@@ -569,6 +582,11 @@ class FootprintIQRepository:
                 logger.debug(f"DB list findings error: {e}")
 
         res = list(self._mem_findings.values())
+        for f in res:
+            if "remediation_status" not in f:
+                f["remediation_status"] = f.get("finding_status", "open")
+            if "finding_status" not in f:
+                f["finding_status"] = f.get("remediation_status", "open")
         if investigation_id:
             res = [f for f in res if f.get("investigation_id") == investigation_id]
         if severity:
@@ -704,3 +722,565 @@ class FootprintIQRepository:
                 logger.debug(f"DB list audit logs error: {e}")
 
         return list(reversed(self._mem_audit[-limit:]))
+
+    # ==========================================
+    # RECON CAMPAIGN MANAGEMENT
+    # ==========================================
+
+    def _init_builtin_profiles(self):
+        """Populates built-in scan profiles if not present."""
+        defaults = [
+            {
+                "name": "Quick Demo",
+                "description": "Fast demonstration using selected common ports against authorized lab targets",
+                "category": "quick",
+                "config_json": '{"scan_types": ["nmap_services", "nmap_nse"], "ports": "21,22,80,445,3306,3632", "service_detection": true, "scripts": ["ftp-vsftpd-backdoor", "http-title"]}',
+                "is_builtin": True
+            },
+            {
+                "name": "Passive Only",
+                "description": "Exclusively non-intrusive OSINT: WHOIS, DNS enumeration, RDAP, theHarvester",
+                "category": "passive",
+                "config_json": '{"scan_types": ["passive"], "collectors": ["whois", "dns", "rdap", "theharvester"]}',
+                "is_builtin": True
+            },
+            {
+                "name": "Basic Discovery",
+                "description": "Host discovery, ping verification, and top 100 common TCP ports",
+                "category": "discovery",
+                "config_json": '{"scan_types": ["network_discovery", "nmap_services"], "ports": "top-100", "service_detection": true}',
+                "is_builtin": True
+            },
+            {
+                "name": "TCP Quick",
+                "description": "Standard fast scan of top 1,000 common TCP ports with version identification",
+                "category": "tcp",
+                "config_json": '{"scan_types": ["nmap_services"], "ports": "1-1024", "service_detection": true}',
+                "is_builtin": True
+            },
+            {
+                "name": "TCP Full",
+                "description": "Comprehensive scan across all 65,535 TCP ports",
+                "category": "tcp",
+                "config_json": '{"scan_types": ["nmap_services"], "ports": "1-65535", "service_detection": true}',
+                "is_builtin": True
+            },
+            {
+                "name": "UDP Basic",
+                "description": "Selected common UDP ports (DNS, DHCP, NTP, SNMP, Syslog)",
+                "category": "udp",
+                "config_json": '{"scan_types": ["nmap_services"], "ports": "53,67,68,123,161,514", "protocol": "udp"}',
+                "is_builtin": True
+            },
+            {
+                "name": "Service Audit",
+                "description": "Deep service detection, OS fingerprinting, and RPC/SMB enumeration",
+                "category": "service",
+                "config_json": '{"scan_types": ["nmap_services"], "service_detection": true, "os_detection": true}',
+                "is_builtin": True
+            },
+            {
+                "name": "Vulnerability Assessment",
+                "description": "Policy-governed NSE vulnerability scripts and Greenbone/OpenVAS evaluation",
+                "category": "vulnerability",
+                "config_json": '{"scan_types": ["nmap_nse", "greenbone", "nessus"], "service_detection": true}',
+                "is_builtin": True
+            },
+            {
+                "name": "Full Recon",
+                "description": "End-to-end multi-engine assessment: Passive OSINT + Nmap Services + NSE + Greenbone + Nessus",
+                "category": "combined",
+                "config_json": '{"scan_types": ["combined"], "service_detection": true, "os_detection": true}',
+                "is_builtin": True
+            }
+        ]
+
+        for p in defaults:
+            if p["name"] not in self._mem_profiles:
+                self._mem_profiles[p["name"]] = {
+                    "id": len(self._mem_profiles) + 1,
+                    "name": p["name"],
+                    "description": p["description"],
+                    "category": p["category"],
+                    "config_json": p["config_json"],
+                    "is_builtin": p["is_builtin"],
+                    "created_by": "system",
+                    "created_at": utcnow().isoformat()
+                }
+
+    def generate_recon_id(self) -> str:
+        """Generates a human-readable, persistent server-side Recon ID: FIQ-REC-YYYYMMDD-XXXX."""
+        date_str = utcnow().strftime("%Y%m%d")
+        existing_count = len(self._mem_recon_campaigns) + 1
+        db = self._get_db()
+        if db:
+            try:
+                count = db.query(ReconCampaign).count()
+                existing_count = count + 1
+            except Exception:
+                pass
+        return f"FIQ-REC-{date_str}-{existing_count:04d}"
+
+    def create_recon_campaign(
+        self,
+        name: str,
+        target_value: str,
+        target_type: str = "ipv4",
+        description: str = "",
+        purpose: str = "Security Audit",
+        scope_description: str = "",
+        excluded_targets: str = "",
+        excluded_ports: str = "",
+        allowed_methods: str = "all",
+        allowed_ports: str = "1-65535",
+        authorized_by: str = "asip_ali",
+        creator_id: int = 1,
+        selected_scan_types: str = "combined",
+        scan_config_json: str = "{}"
+    ) -> Dict[str, Any]:
+        """Creates a new Recon Campaign with guaranteed unique Recon ID and auto-registered scope."""
+        recon_id = self.generate_recon_id()
+
+        db = self._get_db()
+        if db:
+            try:
+                # 1. Also create corresponding Investigation record so foreign keys remain unified
+                inv = db.query(Investigation).filter(Investigation.investigation_id == recon_id).first()
+                if not inv:
+                    inv = Investigation(
+                        investigation_id=recon_id,
+                        title=name,
+                        description=description,
+                        creator_id=creator_id,
+                        status="active",
+                        exposure_score=0.0,
+                        created_at=utcnow(),
+                        updated_at=utcnow()
+                    )
+                    db.add(inv)
+                    db.commit()
+                    db.refresh(inv)
+
+                camp = ReconCampaign(
+                    recon_id=recon_id,
+                    investigation_id=recon_id,
+                    name=name,
+                    description=description,
+                    purpose=purpose,
+                    scope_description=scope_description,
+                    target_type=target_type,
+                    target_value=target_value,
+                    excluded_targets=excluded_targets,
+                    excluded_ports=excluded_ports,
+                    allowed_methods=allowed_methods,
+                    allowed_ports=allowed_ports,
+                    authorization_status="Authorized",
+                    authorized_by=authorized_by,
+                    authorized_at=utcnow(),
+                    status="Authorized",
+                    selected_scan_types=selected_scan_types,
+                    scan_config_json=scan_config_json,
+                    progress=0,
+                    current_stage="Configured",
+                    creator_id=creator_id,
+                    created_at=utcnow(),
+                    updated_at=utcnow()
+                )
+                db.add(camp)
+
+                # 2. Automatically register target in authorized_targets table under recon_id
+                target_rec = AuthorizedTarget(
+                    target_id=f"TGT-{uuid.uuid4().hex[:8].upper()}",
+                    investigation_id=inv.id,
+                    target=target_value,
+                    target_type=target_type,
+                    name=f"{name} Target ({target_value})",
+                    category="authorized_lab",
+                    scope=scope_description or f"{target_value} authorized scope",
+                    permitted_profiles="lab-basic,default,lab-safe-minimal",
+                    allowed_ports=allowed_ports,
+                    authorization_status="AUTHORIZED_LOCAL_LAB",
+                    authorized_by=authorized_by,
+                    created_at=utcnow()
+                )
+                db.add(target_rec)
+                db.commit()
+                db.refresh(camp)
+
+                data = {
+                    "id": camp.id,
+                    "recon_id": camp.recon_id,
+                    "investigation_id": camp.investigation_id,
+                    "name": camp.name,
+                    "description": camp.description,
+                    "purpose": camp.purpose,
+                    "scope_description": camp.scope_description,
+                    "target_type": camp.target_type,
+                    "target_value": camp.target_value,
+                    "excluded_targets": camp.excluded_targets,
+                    "excluded_ports": camp.excluded_ports,
+                    "allowed_methods": camp.allowed_methods,
+                    "allowed_ports": camp.allowed_ports,
+                    "authorization_status": camp.authorization_status,
+                    "authorized_by": camp.authorized_by,
+                    "authorized_at": camp.authorized_at.isoformat(),
+                    "status": camp.status,
+                    "selected_scan_types": camp.selected_scan_types,
+                    "scan_config_json": camp.scan_config_json,
+                    "progress": camp.progress,
+                    "current_stage": camp.current_stage,
+                    "creator_id": camp.creator_id,
+                    "created_at": camp.created_at.isoformat(),
+                    "updated_at": camp.updated_at.isoformat()
+                }
+                self._mem_recon_campaigns[recon_id] = data
+                return data
+            except Exception as e:
+                db.rollback()
+                logger.debug(f"DB recon campaign creation fallback: {e}")
+
+        # Memory store fallback
+        # Ensure underlying investigation in memory
+        self.create_investigation(title=name, description=description)
+        # Register target in memory
+        self.add_authorized_target(
+            investigation_id=recon_id,
+            target=target_value,
+            name=f"{name} Target",
+            scope=scope_description or f"{target_value} authorized scope",
+            permitted_profiles="lab-basic,default,lab-safe-minimal",
+            allowed_ports=allowed_ports,
+            authorized_by=authorized_by
+        )
+
+        camp_data = {
+            "id": len(self._mem_recon_campaigns) + 1,
+            "recon_id": recon_id,
+            "investigation_id": recon_id,
+            "name": name,
+            "description": description,
+            "purpose": purpose,
+            "scope_description": scope_description,
+            "target_type": target_type,
+            "target_value": target_value,
+            "excluded_targets": excluded_targets,
+            "excluded_ports": excluded_ports,
+            "allowed_methods": allowed_methods,
+            "allowed_ports": allowed_ports,
+            "authorization_status": "Authorized",
+            "authorized_by": authorized_by,
+            "authorized_at": utcnow().isoformat(),
+            "status": "Authorized",
+            "selected_scan_types": selected_scan_types,
+            "scan_config_json": scan_config_json,
+            "progress": 0,
+            "current_stage": "Configured",
+            "creator_id": creator_id,
+            "created_at": utcnow().isoformat(),
+            "updated_at": utcnow().isoformat()
+        }
+        self._mem_recon_campaigns[recon_id] = camp_data
+        return camp_data
+
+    def get_recon_campaign(self, recon_id: str) -> Optional[Dict[str, Any]]:
+        db = self._get_db()
+        if db:
+            try:
+                camp = db.query(ReconCampaign).filter(ReconCampaign.recon_id == recon_id).first()
+                if camp:
+                    return {
+                        "id": camp.id,
+                        "recon_id": camp.recon_id,
+                        "investigation_id": camp.investigation_id,
+                        "name": camp.name,
+                        "description": camp.description,
+                        "purpose": camp.purpose,
+                        "scope_description": camp.scope_description,
+                        "target_type": camp.target_type,
+                        "target_value": camp.target_value,
+                        "excluded_targets": camp.excluded_targets,
+                        "excluded_ports": camp.excluded_ports,
+                        "allowed_methods": camp.allowed_methods,
+                        "allowed_ports": camp.allowed_ports,
+                        "authorization_status": camp.authorization_status,
+                        "authorized_by": camp.authorized_by,
+                        "authorized_at": camp.authorized_at.isoformat() if camp.authorized_at else None,
+                        "status": camp.status,
+                        "selected_scan_types": camp.selected_scan_types,
+                        "scan_config_json": camp.scan_config_json,
+                        "progress": camp.progress,
+                        "current_stage": camp.current_stage,
+                        "creator_id": camp.creator_id,
+                        "created_at": camp.created_at.isoformat() if camp.created_at else None,
+                        "updated_at": camp.updated_at.isoformat() if camp.updated_at else None
+                    }
+            except Exception as e:
+                logger.debug(f"DB get recon campaign error: {e}")
+
+        return self._mem_recon_campaigns.get(recon_id)
+
+    def list_recon_campaigns(self) -> List[Dict[str, Any]]:
+        db = self._get_db()
+        if db:
+            try:
+                camps = db.query(ReconCampaign).order_by(ReconCampaign.created_at.desc()).all()
+                if camps:
+                    return [{
+                        "id": c.id,
+                        "recon_id": c.recon_id,
+                        "investigation_id": c.investigation_id,
+                        "name": c.name,
+                        "description": c.description,
+                        "purpose": c.purpose,
+                        "scope_description": c.scope_description,
+                        "target_type": c.target_type,
+                        "target_value": c.target_value,
+                        "authorization_status": c.authorization_status,
+                        "authorized_by": c.authorized_by,
+                        "status": c.status,
+                        "progress": c.progress,
+                        "current_stage": c.current_stage,
+                        "created_at": c.created_at.isoformat() if c.created_at else None
+                    } for c in camps]
+            except Exception as e:
+                logger.debug(f"DB list recon campaigns error: {e}")
+
+        return list(reversed(list(self._mem_recon_campaigns.values())))
+
+    def update_recon_campaign(self, recon_id: str, **kwargs) -> bool:
+        db = self._get_db()
+        if db:
+            try:
+                camp = db.query(ReconCampaign).filter(ReconCampaign.recon_id == recon_id).first()
+                if camp:
+                    for k, v in kwargs.items():
+                        if hasattr(camp, k):
+                            setattr(camp, k, v)
+                    camp.updated_at = utcnow()
+                    db.commit()
+                    return True
+            except Exception as e:
+                db.rollback()
+                logger.debug(f"DB update recon campaign error: {e}")
+
+        if recon_id in self._mem_recon_campaigns:
+            self._mem_recon_campaigns[recon_id].update(kwargs)
+            self._mem_recon_campaigns[recon_id]["updated_at"] = utcnow().isoformat()
+            return True
+        return False
+
+    # ==========================================
+    # SCAN EXECUTION EVENTS (TERMINAL LOG STREAM)
+    # ==========================================
+
+    def add_scan_execution_event(
+        self,
+        scan_id: str,
+        event_type: str,
+        message: str,
+        stage: Optional[str] = None,
+        progress: Optional[int] = None,
+        details_json: Optional[str] = None,
+        recon_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Persists a real execution event to the scan execution log."""
+        ts = utcnow()
+        level_map = {
+            "stage_start": "STAGE",
+            "stage_complete": "SUCCESS",
+            "finding_discovered": "FINDING",
+            "port_discovered": "SUCCESS",
+            "warning": "WARN",
+            "error": "ERROR",
+            "critical": "CRITICAL",
+            "security": "SECURITY",
+            "init": "INFO",
+            "log": "INFO"
+        }
+        level = level_map.get(event_type.lower(), "INFO")
+        event_data = {
+            "scan_id": scan_id,
+            "recon_id": recon_id,
+            "event_type": event_type,
+            "level": level,
+            "stage": stage,
+            "message": message,
+            "details_json": details_json,
+            "progress": progress,
+            "timestamp": ts.isoformat()
+        }
+
+        db = self._get_db()
+        if db:
+            try:
+                ev = ScanExecutionEvent(
+                    scan_id=scan_id,
+                    recon_id=recon_id,
+                    event_type=event_type,
+                    stage=stage,
+                    message=message,
+                    details_json=details_json,
+                    progress=progress,
+                    timestamp=ts
+                )
+                db.add(ev)
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.debug(f"DB add scan execution event fallback: {e}")
+
+        if scan_id not in self._mem_scan_events:
+            self._mem_scan_events[scan_id] = []
+        self._mem_scan_events[scan_id].append(event_data)
+        return event_data
+
+    def list_scan_execution_events(self, scan_id: str) -> List[Dict[str, Any]]:
+        """Retrieves all chronological execution events for a scan."""
+        db = self._get_db()
+        if db:
+            try:
+                events = db.query(ScanExecutionEvent).filter(
+                    ScanExecutionEvent.scan_id == scan_id
+                ).order_by(ScanExecutionEvent.timestamp.asc()).all()
+                if events:
+                    return [{
+                        "id": e.id,
+                        "scan_id": e.scan_id,
+                        "recon_id": e.recon_id,
+                        "event_type": e.event_type,
+                        "level": level_map.get((e.event_type or "").lower(), "INFO"),
+                        "stage": e.stage,
+                        "message": e.message,
+                        "details_json": e.details_json,
+                        "progress": e.progress,
+                        "timestamp": e.timestamp.isoformat()
+                    } for e in events]
+            except Exception as e:
+                logger.debug(f"DB list scan execution events error: {e}")
+
+        return self._mem_scan_events.get(scan_id, [])
+
+    # ==========================================
+    # SAVED SCAN PROFILES
+    # ==========================================
+
+    def list_saved_scan_profiles(self) -> List[Dict[str, Any]]:
+        db = self._get_db()
+        if db:
+            try:
+                profs = db.query(SavedScanProfile).order_by(SavedScanProfile.name.asc()).all()
+                if profs:
+                    return [{
+                        "id": p.id,
+                        "name": p.name,
+                        "description": p.description,
+                        "category": p.category,
+                        "config_json": p.config_json,
+                        "is_builtin": p.is_builtin,
+                        "created_by": p.created_by
+                    } for p in profs]
+            except Exception as e:
+                logger.debug(f"DB list saved scan profiles error: {e}")
+
+        return list(self._mem_profiles.values())
+
+    def get_saved_scan_profile(self, name: str) -> Optional[Dict[str, Any]]:
+        db = self._get_db()
+        if db:
+            try:
+                prof = db.query(SavedScanProfile).filter(SavedScanProfile.name == name).first()
+                if prof:
+                    return {
+                        "id": prof.id,
+                        "name": prof.name,
+                        "description": prof.description,
+                        "category": prof.category,
+                        "config_json": prof.config_json,
+                        "is_builtin": prof.is_builtin,
+                        "created_by": prof.created_by
+                    }
+            except Exception as e:
+                logger.debug(f"DB get saved scan profile error: {e}")
+
+        return self._mem_profiles.get(name)
+
+    # ==========================================
+    # REMEDIATION TRACKING
+    # ==========================================
+
+    def update_finding_remediation_status(
+        self,
+        finding_id: str,
+        new_status: str,
+        changed_by: str = "asip_ali",
+        notes: str = ""
+    ) -> bool:
+        """Updates finding status and records an audit trail entry in remediation history."""
+        db = self._get_db()
+        prev_status = "open"
+        if db:
+            try:
+                finding = db.query(VulnerabilityFinding).filter(VulnerabilityFinding.finding_id == finding_id).first()
+                if finding:
+                    prev_status = finding.finding_status
+                    finding.finding_status = new_status
+                    finding.remediation_notes = notes
+                    finding.status_updated_by = changed_by
+                    finding.status_updated_at = utcnow()
+
+                    hist = RemediationHistory(
+                        finding_id=finding_id,
+                        previous_status=prev_status,
+                        new_status=new_status,
+                        changed_by=changed_by,
+                        notes=notes,
+                        created_at=utcnow()
+                    )
+                    db.add(hist)
+                    db.commit()
+                    return True
+            except Exception as e:
+                db.rollback()
+                logger.debug(f"DB update finding remediation status error: {e}")
+
+        for f in self._mem_findings.values():
+            if f.get("finding_id") == finding_id:
+                prev_status = f.get("finding_status", "open")
+                f["finding_status"] = new_status
+                f["remediation_status"] = new_status
+                f["remediation_notes"] = notes
+                f["status_updated_by"] = changed_by
+                f["status_updated_at"] = utcnow().isoformat()
+                self._mem_remediation.append({
+                    "finding_id": finding_id,
+                    "previous_status": prev_status,
+                    "new_status": new_status,
+                    "changed_by": changed_by,
+                    "notes": notes,
+                    "created_at": utcnow().isoformat()
+                })
+                return True
+        return False
+
+    def list_remediation_history(self, finding_id: str) -> List[Dict[str, Any]]:
+        db = self._get_db()
+        if db:
+            try:
+                history = db.query(RemediationHistory).filter(
+                    RemediationHistory.finding_id == finding_id
+                ).order_by(RemediationHistory.created_at.desc()).all()
+                if history:
+                    return [{
+                        "id": h.id,
+                        "finding_id": h.finding_id,
+                        "previous_status": h.previous_status,
+                        "new_status": h.new_status,
+                        "changed_by": h.changed_by,
+                        "notes": h.notes,
+                        "created_at": h.created_at.isoformat()
+                    } for h in history]
+            except Exception as e:
+                logger.debug(f"DB list remediation history error: {e}")
+
+        return [h for h in self._mem_remediation if h.get("finding_id") == finding_id]
+

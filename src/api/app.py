@@ -19,7 +19,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.api.routers import (
-    auth, investigations, targets, scans, findings, evidence, reports, health, ui
+    auth, investigations, targets, scans, findings, evidence, reports, health, ui, recon
 )
 from src.db.session import init_engine
 from src.db.repository import FootprintIQRepository
@@ -113,6 +113,7 @@ async def add_security_headers(request: Request, call_next):
 
 # Include all API routers
 app.include_router(auth.router)
+app.include_router(recon.router)
 app.include_router(investigations.router)
 app.include_router(targets.router)
 app.include_router(scans.router)

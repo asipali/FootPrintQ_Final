@@ -26,6 +26,7 @@ REPORTS_DIR = os.path.join(PROJECT_ROOT, "reports")
 
 class GenerateReportRequest(BaseModel):
     investigation_id: str = Field(..., example="INV-20261110-001")
+    report_format: Optional[str] = Field("executive", example="executive", description="'executive' or 'technical'")
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -83,10 +84,21 @@ def generate_report(
 ):
     inv = repo.get_investigation(req.investigation_id)
     if not inv:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Investigation '{req.investigation_id}' not found. Cannot generate report for nonexistent investigation."
-        )
+        # Check if it is a recon campaign ID
+        camp = repo.get_recon_campaign(req.investigation_id)
+        if camp:
+            inv = {
+                "investigation_id": camp["recon_id"],
+                "recon_id": camp["recon_id"],
+                "title": camp["name"],
+                "name": camp["name"],
+                "description": camp["description"]
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Investigation or Recon Campaign '{req.investigation_id}' not found. Cannot generate report."
+            )
 
     targets = repo.list_authorized_targets(req.investigation_id)
     findings = repo.list_findings(req.investigation_id)
@@ -97,12 +109,14 @@ def generate_report(
         investigation=inv,
         targets=targets,
         findings=findings,
-        evidence=evidence
+        evidence=evidence,
+        report_format=req.report_format or "executive"
     )
 
     return {
         "status": "SUCCESS",
         "investigation_id": req.investigation_id,
+        "report_format": req.report_format or "executive",
         "pdf_report_path": pdf_path,
         "file_name": os.path.basename(pdf_path),
         "download_url": f"/api/v1/reports/{os.path.basename(pdf_path)}/download",

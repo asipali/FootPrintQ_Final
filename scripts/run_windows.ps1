@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     FootprintIQ - PowerShell Localhost Deployment Launcher
     Accessible at: http://localhost:8000
@@ -31,3 +31,4 @@ if (-not $env:SQL_SERVER_DATABASE) { $env:SQL_SERVER_DATABASE = "FootprintIQ" }
 
 Write-Host "[✓] Starting Uvicorn on http://localhost:8000..." -ForegroundColor Green
 python -m uvicorn src.api.app:app --host 127.0.0.1 --port 8000 --reload
+

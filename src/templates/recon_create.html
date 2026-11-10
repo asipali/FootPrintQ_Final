@@ -1,0 +1,591 @@
+{% extends "base.html" %}
+{% block title %}Create Recon Campaign — FootprintIQ Enterprise{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+
+  <!-- Breadcrumbs & Header -->
+  <div class="flex items-center justify-between">
+    <div class="flex items-center space-x-2 text-xs text-slate-500">
+      <a href="/recon" class="hover:text-slate-800 transition">Recon Campaigns</a>
+      <span>/</span>
+      <span class="font-bold text-slate-800">New Campaign Wizard</span>
+    </div>
+    <a href="/recon" class="text-xs font-semibold text-slate-500 hover:text-slate-800 transition">
+      &larr; Back to Campaigns
+    </a>
+  </div>
+
+  <!-- Wizard Card -->
+  <div class="fiq-card bg-white p-8 reveal-on-scroll">
+
+    <!-- Stepper Navigation -->
+    <div class="mb-8">
+      <div class="flex items-center justify-between max-w-2xl mx-auto relative">
+        <!-- Connecting Line -->
+        <div class="absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-full bg-slate-200 z-0"></div>
+        <div id="progressLine" class="absolute left-0 top-1/2 -translate-y-1/2 h-0.5 bg-blue-600 transition-all duration-300 z-0" style="width: 0%;"></div>
+
+        <!-- Step 1 -->
+        <div class="relative z-10 flex flex-col items-center">
+          <div id="stepBubble-1" class="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shadow transition">
+            1
+          </div>
+          <span class="text-[11px] font-semibold text-slate-800 mt-2">Metadata</span>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="relative z-10 flex flex-col items-center">
+          <div id="stepBubble-2" class="w-8 h-8 rounded-full bg-slate-100 text-slate-400 font-bold text-xs flex items-center justify-center border border-slate-200 transition">
+            2
+          </div>
+          <span class="text-[11px] font-semibold text-slate-400 mt-2" id="stepLabel-2">Scope</span>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="relative z-10 flex flex-col items-center">
+          <div id="stepBubble-3" class="w-8 h-8 rounded-full bg-slate-100 text-slate-400 font-bold text-xs flex items-center justify-center border border-slate-200 transition">
+            3
+          </div>
+          <span class="text-[11px] font-semibold text-slate-400 mt-2" id="stepLabel-3">Scanners</span>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="relative z-10 flex flex-col items-center">
+          <div id="stepBubble-4" class="w-8 h-8 rounded-full bg-slate-100 text-slate-400 font-bold text-xs flex items-center justify-center border border-slate-200 transition">
+            4
+          </div>
+          <span class="text-[11px] font-semibold text-slate-400 mt-2" id="stepLabel-4">Confirm</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Alert Box -->
+    <div id="wizardAlertBox" class="hidden mb-6 p-3.5 rounded-lg text-xs font-medium border"></div>
+
+    <form id="reconCreateForm" onsubmit="event.preventDefault();">
+
+      <!-- ===================================================================
+           STEP 1: METADATA & PURPOSE
+           =================================================================== -->
+      <div id="stepSection-1" class="space-y-6">
+        <div>
+          <h2 class="text-base font-bold text-slate-900">Step 1: Campaign Metadata</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Define campaign nomenclature, business objective, and regulatory/audit context.</p>
+        </div>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Campaign Name <span class="text-rose-500">*</span></label>
+            <input type="text" id="campaignName" required value="Lab Assessment & Perimeter Recon 2026" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Investigation Purpose <span class="text-rose-500">*</span></label>
+              <select id="campaignPurpose" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+                <option value="Security Audit">Authorized Security Audit</option>
+                <option value="Vulnerability Assessment">Vulnerability Assessment</option>
+                <option value="Perimeter Reconnaissance">Perimeter Reconnaissance</option>
+                <option value="Compliance Verification">Compliance Verification (NIST / ISO 27001)</option>
+                <option value="Lab Defense Verification">Lab Defense Verification</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Authorized Operator</label>
+              <input type="text" id="campaignOperator" value="asip_ali" readonly class="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-500 cursor-not-allowed">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Scope &amp; Description</label>
+            <textarea id="campaignDescription" rows="3" class="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" placeholder="e.g. Authorized lab reconnaissance against Metasploitable2 VM for vulnerability correlation and risk exposure scoring.">Authorized vulnerability assessment and digital footprint correlation against local lab target.</textarea>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-slate-100 flex justify-end">
+          <button type="button" onclick="goToStep(2)" class="inline-flex items-center space-x-1.5 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition">
+            <span>Next: Target &amp; Scope</span>
+            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- ===================================================================
+           STEP 2: TARGET & SCOPE DEFINITION
+           =================================================================== -->
+      <div id="stepSection-2" class="hidden space-y-6">
+        <div>
+          <h2 class="text-base font-bold text-slate-900">Step 2: Target &amp; Scope Boundary</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Strict target authorization. Fail-closed rules prevent scanning unauthorized assets.</p>
+        </div>
+
+        <!-- Target Authorization Notice -->
+        <div class="p-4 rounded-xl bg-blue-50/70 border border-blue-200 flex items-start space-x-3">
+          <i data-lucide="shield-check" class="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5"></i>
+          <div class="text-xs text-blue-900 leading-relaxed">
+            <span class="font-bold">Authorized Lab Target:</span> Only authorized hosts registered in the target authorization policy may be scanned. Metasploitable2 is configured at <span class="mono font-bold text-blue-950">192.168.56.111</span>. Any external or unapproved targets are rejected immediately with HTTP 403.
+          </div>
+        </div>
+
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="md:col-span-2">
+              <label class="block text-xs font-bold text-slate-700 mb-1">Target Address <span class="text-rose-500">*</span></label>
+              <input type="text" id="targetValue" value="192.168.56.111" class="mono w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Target Type</label>
+              <select id="targetType" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+                <option value="ipv4">IPv4 Host (Single)</option>
+                <option value="domain">Domain / Hostname</option>
+                <option value="range">IP Range (Lab Only)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Excluded Targets (Out of Scope)</label>
+              <input type="text" id="excludedTargets" placeholder="e.g. 192.168.56.1, 192.168.56.100" class="mono w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Excluded Ports</label>
+              <input type="text" id="excludedPorts" placeholder="e.g. 25, 135" class="mono w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Allowed Port Specification</label>
+            <input type="text" id="allowedPorts" value="1-65535" class="mono w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+            <p class="text-[10px] text-slate-400 mt-1">Specify port range (e.g. "1-1024", "21,22,80,443,3306", or "1-65535").</p>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-slate-100 flex justify-between">
+          <button type="button" onclick="goToStep(1)" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition">
+            &larr; Back
+          </button>
+          <button type="button" onclick="goToStep(3)" class="inline-flex items-center space-x-1.5 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition">
+            <span>Next: Configure Scanners</span>
+            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- ===================================================================
+           STEP 3: SCAN METHODS & PROFILE SELECTION
+           =================================================================== -->
+      <div id="stepSection-3" class="hidden space-y-6">
+        <div>
+          <h2 class="text-base font-bold text-slate-900">Step 3: Scanner Methods &amp; Profiles</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Select a predefined reconnaissance profile or customize passive, active, and vuln engines.</p>
+        </div>
+
+        <!-- Builtin Profiles Grid -->
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-2">Preset Scan Profiles</label>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <!-- Quick Demo -->
+            <div onclick="selectProfile('quick-demo', this)" class="profile-card cursor-pointer p-3.5 rounded-xl border-2 border-blue-500 bg-blue-50/40 hover:border-blue-600 transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-900">Quick Demo</span>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">Fast</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">Top ports, fast banner discovery, safe NSE checks</p>
+            </div>
+
+            <!-- Basic Discovery -->
+            <div onclick="selectProfile('basic-discovery', this)" class="profile-card cursor-pointer p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-900">Basic Discovery</span>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">Passive+Active</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">DNS, WHOIS, ICMP ping, top 100 TCP ports</p>
+            </div>
+
+            <!-- Full Recon & Vuln -->
+            <div onclick="selectProfile('full-audit', this)" class="profile-card cursor-pointer p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-900">Full Audit</span>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800">Comprehensive</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">1-65535 TCP, service detection, NSE vuln, OpenVAS</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Granular Method Options -->
+        <div class="space-y-4 pt-2">
+          <!-- Category A: Passive Reconnaissance -->
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-800 flex items-center space-x-1.5">
+                <i data-lucide="eye" class="w-4 h-4 text-slate-500"></i>
+                <span>A. Passive Reconnaissance</span>
+              </span>
+              <span class="text-[10px] font-semibold text-slate-400">Zero packet contact</span>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 pt-1 text-xs">
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkWhois" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>WHOIS / RDAP</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkDns" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>DNS Enum</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkHarvester" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>theHarvester</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkCerts" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>Certificates</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Category B: Active Reconnaissance -->
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-800 flex items-center space-x-1.5">
+                <i data-lucide="radio" class="w-4 h-4 text-slate-500"></i>
+                <span>B. Active Reconnaissance (Nmap Engine)</span>
+              </span>
+              <span class="text-[10px] font-semibold text-emerald-600">Local Lab SYN/ACK</span>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 pt-1 text-xs">
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkHostDiscovery" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>Host Discovery (-sn)</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkServiceDetection" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>Service Version (-sV)</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkOsDetection" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>OS Fingerprint (-O)</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkUdpScan" class="rounded text-blue-600 focus:ring-blue-500">
+                <span>UDP Discovery (-sU)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Category C: Vulnerability Assessment -->
+          <div class="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-800 flex items-center space-x-1.5">
+                <i data-lucide="shield-alert" class="w-4 h-4 text-slate-500"></i>
+                <span>C. Vulnerability Assessment</span>
+              </span>
+              <span class="text-[10px] font-semibold text-rose-600">Policy-Governed</span>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-2 pt-1 text-xs">
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkNseVuln" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>Nmap NSE Scripts</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkGreenbone" checked class="rounded text-blue-600 focus:ring-blue-500">
+                <span>Greenbone / OpenVAS</span>
+              </label>
+              <label class="flex items-center space-x-2 text-slate-700 cursor-pointer">
+                <input type="checkbox" id="chkNessus" class="rounded text-blue-600 focus:ring-blue-500">
+                <span>Tenable Nessus Bridge</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-slate-100 flex justify-between">
+          <button type="button" onclick="goToStep(2)" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition">
+            &larr; Back
+          </button>
+          <button type="button" onclick="prepareConfirmation(); goToStep(4);" class="inline-flex items-center space-x-1.5 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition">
+            <span>Next: Review &amp; Launch</span>
+            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- ===================================================================
+           STEP 4: CONFIRMATION & LAUNCH PREVIEW
+           =================================================================== -->
+      <div id="stepSection-4" class="hidden space-y-6">
+        <div>
+          <h2 class="text-base font-bold text-slate-900">Step 4: Review Scope &amp; Authorize Reconnaissance</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Confirm operational parameters prior to dispatching background execution threads.</p>
+        </div>
+
+        <!-- Summary Review Box -->
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <div class="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-800">Campaign Execution Manifest</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">Ready for Launch</span>
+          </div>
+          <div class="p-5 space-y-3 text-xs">
+            <div class="grid grid-cols-3 py-1 border-b border-slate-100">
+              <span class="text-slate-500">Campaign Name:</span>
+              <span id="manifestName" class="col-span-2 font-bold text-slate-900">—</span>
+            </div>
+            <div class="grid grid-cols-3 py-1 border-b border-slate-100">
+              <span class="text-slate-500">Target Asset:</span>
+              <span id="manifestTarget" class="col-span-2 mono font-bold text-blue-700">—</span>
+            </div>
+            <div class="grid grid-cols-3 py-1 border-b border-slate-100">
+              <span class="text-slate-500">Purpose:</span>
+              <span id="manifestPurpose" class="col-span-2 text-slate-800 font-medium">—</span>
+            </div>
+            <div class="grid grid-cols-3 py-1 border-b border-slate-100">
+              <span class="text-slate-500">Target Range / Ports:</span>
+              <span id="manifestPorts" class="col-span-2 mono text-slate-800">—</span>
+            </div>
+            <div class="grid grid-cols-3 py-1 border-b border-slate-100">
+              <span class="text-slate-500">Selected Engines:</span>
+              <span id="manifestEngines" class="col-span-2 font-medium text-slate-800">—</span>
+            </div>
+            <div class="grid grid-cols-3 py-1">
+              <span class="text-slate-500">Evidence Vault:</span>
+              <span class="col-span-2 font-medium text-emerald-700">SeaweedFS (Master 9333 &bull; Volume 8080) &bull; SHA-256 Verified</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-4 rounded-xl bg-amber-50/60 border border-amber-200/80 text-xs text-amber-900 flex items-start space-x-2.5">
+          <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5"></i>
+          <div>
+            <span class="font-bold">Execution Notice:</span> Clicking "Authorize &amp; Launch Recon" will generate a unique Recon ID, commit authorization records to Microsoft SQL Server 2022 Express, and immediately spawn the background scanning thread with real-time SSE telemetry.
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-slate-100 flex justify-between items-center">
+          <button type="button" onclick="goToStep(3)" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition">
+            &larr; Back
+          </button>
+          <button type="button" id="submitLaunchBtn" onclick="submitAndLaunchCampaign()" class="inline-flex items-center space-x-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold shadow-md transition">
+            <i data-lucide="play" class="w-4 h-4"></i>
+            <span>Authorize &amp; Launch Recon</span>
+          </button>
+        </div>
+      </div>
+
+    </form>
+  </div>
+
+</div>
+
+<script>
+let currentStep = 1;
+let selectedProfileKey = 'quick-demo';
+
+function goToStep(step) {
+  // Validate current step before advancing
+  if (step > currentStep) {
+    if (currentStep === 1) {
+      const name = document.getElementById('campaignName').value.trim();
+      if (!name) {
+        showWizardAlert('Please provide a Campaign Name before proceeding.', 'error');
+        return;
+      }
+    } else if (currentStep === 2) {
+      const target = document.getElementById('targetValue').value.trim();
+      if (!target) {
+        showWizardAlert('Please enter an authorized Target IP or hostname.', 'error');
+        return;
+      }
+    }
+  }
+
+  hideWizardAlert();
+  document.getElementById(`stepSection-${currentStep}`).classList.add('hidden');
+  document.getElementById(`stepSection-${step}`).classList.remove('hidden');
+
+  // Update bubbles
+  for (let i = 1; i <= 4; i++) {
+    const bubble = document.getElementById(`stepBubble-${i}`);
+    const label = document.getElementById(`stepLabel-${i}`);
+    if (i < step) {
+      bubble.className = 'w-8 h-8 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center shadow transition';
+      bubble.innerHTML = '<i data-lucide="check" class="w-4 h-4"></i>';
+      if (label) label.className = 'text-[11px] font-semibold text-emerald-700 mt-2';
+    } else if (i === step) {
+      bubble.className = 'w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shadow transition';
+      bubble.innerText = i;
+      if (label) label.className = 'text-[11px] font-semibold text-slate-900 mt-2';
+    } else {
+      bubble.className = 'w-8 h-8 rounded-full bg-slate-100 text-slate-400 font-bold text-xs flex items-center justify-center border border-slate-200 transition';
+      bubble.innerText = i;
+      if (label) label.className = 'text-[11px] font-semibold text-slate-400 mt-2';
+    }
+  }
+
+  // Update progress line
+  const progressPercent = ((step - 1) / 3) * 100;
+  document.getElementById('progressLine').style.width = progressPercent + '%';
+
+  currentStep = step;
+  if (window.lucide) lucide.createIcons();
+}
+
+function selectProfile(profileKey, element) {
+  selectedProfileKey = profileKey;
+  document.querySelectorAll('.profile-card').forEach(c => {
+    c.classList.remove('border-blue-500', 'bg-blue-50/40', 'border-2');
+    c.classList.add('border-slate-200', 'bg-white');
+  });
+  element.classList.remove('border-slate-200', 'bg-white');
+  element.classList.add('border-blue-500', 'bg-blue-50/40', 'border-2');
+
+  if (profileKey === 'quick-demo') {
+    document.getElementById('allowedPorts').value = '21,22,23,25,80,139,445,3306,5432,8080';
+    document.getElementById('chkWhois').checked = true;
+    document.getElementById('chkDns').checked = true;
+    document.getElementById('chkHostDiscovery').checked = true;
+    document.getElementById('chkServiceDetection').checked = true;
+    document.getElementById('chkOsDetection').checked = true;
+    document.getElementById('chkNseVuln').checked = true;
+  } else if (profileKey === 'basic-discovery') {
+    document.getElementById('allowedPorts').value = '1-1024';
+    document.getElementById('chkWhois').checked = true;
+    document.getElementById('chkDns').checked = true;
+    document.getElementById('chkHarvester').checked = true;
+    document.getElementById('chkHostDiscovery').checked = true;
+    document.getElementById('chkServiceDetection').checked = true;
+  } else if (profileKey === 'full-audit') {
+    document.getElementById('allowedPorts').value = '1-65535';
+    document.getElementById('chkWhois').checked = true;
+    document.getElementById('chkDns').checked = true;
+    document.getElementById('chkHarvester').checked = true;
+    document.getElementById('chkCerts').checked = true;
+    document.getElementById('chkHostDiscovery').checked = true;
+    document.getElementById('chkServiceDetection').checked = true;
+    document.getElementById('chkOsDetection').checked = true;
+    document.getElementById('chkUdpScan').checked = true;
+    document.getElementById('chkNseVuln').checked = true;
+    document.getElementById('chkGreenbone').checked = true;
+  }
+}
+
+function prepareConfirmation() {
+  document.getElementById('manifestName').innerText = document.getElementById('campaignName').value;
+  document.getElementById('manifestTarget').innerText = document.getElementById('targetValue').value;
+  document.getElementById('manifestPurpose').innerText = document.getElementById('campaignPurpose').value;
+  document.getElementById('manifestPorts').innerText = document.getElementById('allowedPorts').value || '1-65535';
+
+  const engines = [];
+  if (document.getElementById('chkWhois').checked) engines.push('WHOIS');
+  if (document.getElementById('chkDns').checked) engines.push('DNS');
+  if (document.getElementById('chkHarvester').checked) engines.push('theHarvester');
+  if (document.getElementById('chkServiceDetection').checked) engines.push('Nmap SYN/sV');
+  if (document.getElementById('chkOsDetection').checked) engines.push('OS Detect');
+  if (document.getElementById('chkNseVuln').checked) engines.push('NSE Scripts');
+  if (document.getElementById('chkGreenbone').checked) engines.push('Greenbone/OpenVAS');
+  if (document.getElementById('chkNessus').checked) engines.push('Tenable Nessus');
+
+  document.getElementById('manifestEngines').innerText = engines.join(' • ');
+}
+
+function showWizardAlert(msg, type) {
+  const box = document.getElementById('wizardAlertBox');
+  box.classList.remove('hidden', 'bg-rose-50', 'border-rose-200', 'text-rose-800', 'bg-emerald-50', 'border-emerald-200', 'text-emerald-800');
+  if (type === 'error') {
+    box.classList.add('bg-rose-50', 'border-rose-200', 'text-rose-800');
+  } else {
+    box.classList.add('bg-emerald-50', 'border-emerald-200', 'text-emerald-800');
+  }
+  box.innerText = msg;
+}
+
+function hideWizardAlert() {
+  document.getElementById('wizardAlertBox').classList.add('hidden');
+}
+
+async function submitAndLaunchCampaign() {
+  const btn = document.getElementById('submitLaunchBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="inline-block animate-spin mr-2">⏳</span> Initializing Recon...';
+
+  const payload = {
+    name: document.getElementById('campaignName').value.trim(),
+    target_value: document.getElementById('targetValue').value.trim(),
+    target_type: document.getElementById('targetType').value,
+    description: document.getElementById('campaignDescription').value.trim(),
+    purpose: document.getElementById('campaignPurpose').value,
+    scope_description: document.getElementById('targetValue').value.trim() + ' Authorized Scope',
+    excluded_targets: document.getElementById('excludedTargets').value.trim(),
+    excluded_ports: document.getElementById('excludedPorts').value.trim(),
+    allowed_methods: 'all',
+    allowed_ports: document.getElementById('allowedPorts').value.trim() || '1-65535',
+    selected_scan_types: 'combined',
+    scan_config_json: JSON.stringify({
+      profile: selectedProfileKey,
+      ports: document.getElementById('allowedPorts').value.trim() || '1-65535',
+      passive: {
+        whois: document.getElementById('chkWhois').checked,
+        dns: document.getElementById('chkDns').checked,
+        harvester: document.getElementById('chkHarvester').checked,
+        certs: document.getElementById('chkCerts').checked
+      },
+      active: {
+        discovery: document.getElementById('chkHostDiscovery').checked,
+        service: document.getElementById('chkServiceDetection').checked,
+        os: document.getElementById('chkOsDetection').checked,
+        udp: document.getElementById('chkUdpScan').checked
+      },
+      vulnerability: {
+        nse: document.getElementById('chkNseVuln').checked,
+        greenbone: document.getElementById('chkGreenbone').checked,
+        nessus: document.getElementById('chkNessus').checked
+      }
+    })
+  };
+
+  try {
+    // 1. Create campaign
+    const resp = await fetch('/api/v1/recon', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Failed to create campaign');
+    }
+
+    const campaign = await resp.json();
+    const reconId = campaign.recon_id;
+
+    // 2. Start background scan execution
+    const startResp = await fetch(`/api/v1/recon/${reconId}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scan_type: 'combined',
+        profile: selectedProfileKey === 'quick-demo' ? 'lab-basic' : 'comprehensive'
+      })
+    });
+
+    if (!startResp.ok) {
+      const startErr = await startResp.json();
+      console.warn('Scan auto-start warning:', startErr);
+    }
+
+    // 3. Immediately redirect to live terminal
+    window.location.href = `/recon/${reconId}/live`;
+  } catch (e) {
+    showWizardAlert(e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i><span>Authorize &amp; Launch Recon</span>';
+    if (window.lucide) lucide.createIcons();
+  }
+}
+</script>
+{% endblock %}

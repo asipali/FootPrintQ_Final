@@ -119,8 +119,13 @@ class UnifiedScanOrchestrator:
 
     def _run_passive_recon(self, target: str, investigation_id: str, scan_id: str) -> Dict[str, Any]:
         """Runs WHOIS, DNS, theHarvester and RDAP."""
-        pipeline = PassiveReconPipeline(target=target)
-        summary = pipeline.run()
+        summary = {}
+        try:
+            pipeline = PassiveReconPipeline()
+            summary_obj = pipeline.run(target_domain=target)
+            summary = summary_obj.to_dict() if hasattr(summary_obj, "to_dict") else (summary_obj if isinstance(summary_obj, dict) else {})
+        except Exception as e:
+            logger.info(f"Passive pipeline run note for {target}: {e}")
 
         # Complement with RDAP
         rdap_res = self.rdap_collector.lookup_domain(target) if "." in target and not target.replace(".", "").isdigit() else self.rdap_collector.lookup_ip(target)

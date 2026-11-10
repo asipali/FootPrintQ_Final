@@ -1,0 +1,394 @@
+{% extends "base.html" %}
+{% block title %}Live Recon Console — {{ campaign.name }} — FootprintIQ{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-7xl mx-auto">
+
+  <!-- Header Banner -->
+  <div class="fiq-card p-6 border-l-4 border-l-blue-600 bg-white reveal-on-scroll">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center space-x-2">
+          <span class="mono px-2 py-0.5 text-[11px] font-bold rounded bg-blue-50 text-blue-700 border border-blue-200">
+            {{ recon_id }}
+          </span>
+          <span class="text-xs text-slate-400">&bull; Live Execution Telemetry</span>
+        </div>
+        <h1 class="text-xl font-bold text-slate-900 mt-1">{{ campaign.name }}</h1>
+        <p class="text-xs text-slate-500 mt-0.5">
+          Target: <span class="mono font-bold text-slate-800">{{ campaign.target_value }}</span> &bull; Operator: <span class="font-medium text-slate-700">{{ campaign.authorized_by }}</span> &bull; Scope: Fail-Closed Enforced
+        </p>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <button id="cancelScanBtn" onclick="openCancelModal()" class="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold transition">
+          <i data-lucide="stop-circle" class="w-4 h-4"></i>
+          <span>Cancel Scan</span>
+        </button>
+
+        <a href="/recon/{{ recon_id }}/results" id="resultsBtn" class="inline-flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition">
+          <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
+          <span>View Results</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Real-Time Pipeline Stages -->
+  <div class="fiq-card p-5 bg-white reveal-on-scroll">
+    <div class="flex items-center justify-between mb-3">
+      <span class="text-xs font-bold text-slate-800 uppercase tracking-wider">Execution Pipeline Progress</span>
+      <span id="overallPercentText" class="mono text-xs font-bold text-blue-600">0%</span>
+    </div>
+
+    <!-- Overall Progress Bar -->
+    <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden mb-5">
+      <div id="overallProgressBar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 5%;"></div>
+    </div>
+
+    <!-- Pipeline Stages Horizontal Stepper -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2" id="pipelineStagesGrid">
+      <div id="stage-init" class="stage-pill p-2 rounded-lg border border-blue-200 bg-blue-50/70 text-center transition">
+        <div class="text-[10px] font-bold text-blue-800">1. Init</div>
+        <div class="stage-status text-[9px] text-blue-600 font-medium">In Progress</div>
+      </div>
+      <div id="stage-auth" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">2. Authorize</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+      <div id="stage-passive" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">3. Passive OSINT</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+      <div id="stage-discovery" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">4. Discovery</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+      <div id="stage-service" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">5. Ports &amp; Services</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+      <div id="stage-nse" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">6. NSE &amp; Vulns</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+      <div id="stage-correlation" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">7. Correlation</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+      <div id="stage-complete" class="stage-pill p-2 rounded-lg border border-slate-200 bg-slate-50 text-center transition">
+        <div class="text-[10px] font-bold text-slate-700">8. Vault &amp; Done</div>
+        <div class="stage-status text-[9px] text-slate-400 font-medium">Pending</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Real-Time Metrics Counters -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="p-4 rounded-xl border border-slate-200 bg-white">
+      <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Connection Status</span>
+      <div class="mt-1 flex items-center space-x-2">
+        <span id="sseBeacon" class="relative flex h-2.5 w-2.5">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+        </span>
+        <span id="sseStatusText" class="text-xs font-bold text-emerald-700">SSE Connected</span>
+      </div>
+    </div>
+
+    <div class="p-4 rounded-xl border border-slate-200 bg-white">
+      <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Discovered Hosts</span>
+      <div class="mt-1 flex items-baseline space-x-1">
+        <span id="metricHosts" class="mono text-xl font-extrabold text-slate-900">1</span>
+        <span class="text-[10px] text-slate-400 font-medium">active IP</span>
+      </div>
+    </div>
+
+    <div class="p-4 rounded-xl border border-slate-200 bg-white">
+      <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Open Ports Mapped</span>
+      <div class="mt-1 flex items-baseline space-x-1">
+        <span id="metricPorts" class="mono text-xl font-extrabold text-blue-600">0</span>
+        <span class="text-[10px] text-slate-400 font-medium">ports</span>
+      </div>
+    </div>
+
+    <div class="p-4 rounded-xl border border-slate-200 bg-white">
+      <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Correlated Vulnerabilities</span>
+      <div class="mt-1 flex items-baseline space-x-1">
+        <span id="metricFindings" class="mono text-xl font-extrabold text-rose-600">{{ findings_count }}</span>
+        <span class="text-[10px] text-slate-400 font-medium">findings</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terminal Output Card -->
+  <div class="fiq-card bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+
+    <!-- Terminal Header / Controls -->
+    <div class="bg-slate-900/90 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
+      <div class="flex items-center space-x-2">
+        <div class="flex space-x-1.5">
+          <span class="w-3 h-3 rounded-full bg-rose-500/80"></span>
+          <span class="w-3 h-3 rounded-full bg-amber-500/80"></span>
+          <span class="w-3 h-3 rounded-full bg-emerald-500/80"></span>
+        </div>
+        <span class="text-xs font-semibold text-slate-300 mono ml-2">fiq-recon@{{ campaign.target_value }}:~# live-stream</span>
+      </div>
+
+      <div class="flex items-center space-x-3 text-xs">
+        <label class="flex items-center space-x-1.5 text-slate-400 hover:text-slate-200 cursor-pointer select-none">
+          <input type="checkbox" id="autoScrollToggle" checked class="rounded bg-slate-800 border-slate-700 text-blue-500">
+          <span class="text-[11px]">Auto-Scroll</span>
+        </label>
+        <button onclick="copyTerminalText()" class="text-slate-400 hover:text-slate-200 p-1 rounded hover:bg-slate-800 transition" title="Copy Raw Logs">
+          <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+        </button>
+        <button onclick="clearTerminal()" class="text-slate-400 hover:text-slate-200 p-1 rounded hover:bg-slate-800 transition" title="Clear Terminal">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Terminal Body -->
+    <div id="terminalBody" class="p-4 h-[480px] overflow-y-auto font-mono text-[11px] leading-relaxed space-y-1 bg-slate-950 text-slate-300 select-text">
+      <div class="text-slate-500">Connecting to live execution stream for {{ recon_id }}...</div>
+    </div>
+
+    <!-- Terminal Footer Status -->
+    <div class="bg-slate-900/60 px-4 py-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 mono">
+      <div class="flex items-center space-x-2">
+        <span class="text-emerald-400">&bull;</span>
+        <span id="terminalFooterStage">Stage: Initializing</span>
+      </div>
+      <div>
+        <span id="logEventCount">0</span> events received
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Cancel Modal -->
+<div id="cancelModal" class="hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">
+    <div class="flex items-center space-x-3 text-rose-600">
+      <div class="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center">
+        <i data-lucide="alert-octagon" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h3 class="text-sm font-bold text-slate-900">Cancel Active Reconnaissance</h3>
+        <p class="text-xs text-slate-500">Target: {{ campaign.target_value }}</p>
+      </div>
+    </div>
+
+    <p class="text-xs text-slate-600 leading-relaxed">
+      Are you sure you want to cancel scan execution for <span class="mono font-bold text-slate-800">{{ recon_id }}</span>? This will signal graceful termination to active subprocesses and preserve partial findings.
+    </p>
+
+    <div class="pt-3 border-t border-slate-100 flex justify-end space-x-2">
+      <button onclick="closeCancelModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition">
+        Dismiss
+      </button>
+      <button onclick="confirmCancelScan()" class="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg transition">
+        Confirm Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+const reconId = '{{ recon_id }}';
+let eventSource = null;
+let eventCount = 0;
+let detectedPorts = new Set();
+let detectedVulns = 0;
+
+function initSSE() {
+  const terminal = document.getElementById('terminalBody');
+  const beacon = document.getElementById('sseBeacon');
+  const statusText = document.getElementById('sseStatusText');
+
+  eventSource = new EventSource(`/api/v1/recon/${reconId}/stream`);
+
+  eventSource.onopen = function() {
+    statusText.innerText = 'SSE Streaming';
+    statusText.className = 'text-xs font-bold text-emerald-700';
+    beacon.innerHTML = '<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>';
+  };
+
+  eventSource.onmessage = function(e) {
+    try {
+      const data = JSON.parse(e.data);
+      appendTerminalLine(data);
+      updatePipelineStage(data);
+    } catch (err) {
+      console.error('SSE JSON parse error:', err);
+    }
+  };
+
+  eventSource.onerror = function() {
+    statusText.innerText = 'Stream Completed / Closed';
+    statusText.className = 'text-xs font-bold text-slate-500';
+    beacon.innerHTML = '<span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-slate-400"></span>';
+    eventSource.close();
+  };
+}
+
+function appendTerminalLine(event) {
+  const terminal = document.getElementById('terminalBody');
+  eventCount++;
+  document.getElementById('logEventCount').innerText = eventCount;
+
+  const row = document.createElement('div');
+  row.className = 'flex items-start space-x-2';
+
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'text-slate-500 select-none flex-shrink-0';
+  const t = event.timestamp ? event.timestamp.split('T')[1]?.split('.')[0] : new Date().toLocaleTimeString();
+  timeSpan.textContent = `[${t}]`;
+
+  const level = event.level || 'INFO';
+  const levelSpan = document.createElement('span');
+  levelSpan.className = 'font-bold flex-shrink-0 ';
+
+  if (level === 'STAGE') {
+    levelSpan.className += 'text-cyan-400';
+    levelSpan.textContent = '[STAGE]';
+  } else if (level === 'SUCCESS') {
+    levelSpan.className += 'text-emerald-400';
+    levelSpan.textContent = '[SUCCESS]';
+  } else if (level === 'FINDING' || level === 'VULN') {
+    levelSpan.className += 'text-amber-400';
+    levelSpan.textContent = '[VULN]';
+  } else if (level === 'CRITICAL' || level === 'ERROR') {
+    levelSpan.className += 'text-rose-400';
+    levelSpan.textContent = `[${level}]`;
+  } else if (level === 'SECURITY') {
+    levelSpan.className += 'text-purple-400';
+    levelSpan.textContent = '[SECURITY]';
+  } else {
+    levelSpan.className += 'text-slate-400';
+    levelSpan.textContent = '[INFO]';
+  }
+
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'text-slate-200 break-all';
+  msgSpan.textContent = event.message || '';
+
+  row.appendChild(timeSpan);
+  row.appendChild(levelSpan);
+  row.appendChild(msgSpan);
+  terminal.appendChild(row);
+
+  // Parse counters from messages
+  if (event.message) {
+    const portMatch = event.message.match(/port\s+(\d+)\/tcp\s+open/i) || event.message.match(/Discovered open port (\d+)/i);
+    if (portMatch) {
+      detectedPorts.add(portMatch[1]);
+      document.getElementById('metricPorts').innerText = detectedPorts.size;
+    }
+    if (event.level === 'FINDING' || event.message.includes('Vulnerability finding') || event.message.includes('CVE-')) {
+      detectedVulns++;
+      document.getElementById('metricFindings').innerText = detectedVulns;
+    }
+  }
+
+  // Auto-scroll
+  if (document.getElementById('autoScrollToggle').checked) {
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+}
+
+function updatePipelineStage(event) {
+  const stage = (event.stage || '').toLowerCase();
+  const footerStage = document.getElementById('terminalFooterStage');
+  footerStage.innerText = `Stage: ${event.stage || 'Executing'}`;
+
+  const stageMap = {
+    'init': 'stage-init',
+    'initialization': 'stage-init',
+    'auth': 'stage-auth',
+    'authorization': 'stage-auth',
+    'passive': 'stage-passive',
+    'passive recon': 'stage-passive',
+    'discovery': 'stage-discovery',
+    'host discovery': 'stage-discovery',
+    'service': 'stage-service',
+    'service discovery': 'stage-service',
+    'services': 'stage-service',
+    'nse': 'stage-nse',
+    'nse assessment': 'stage-nse',
+    'vulnerability': 'stage-nse',
+    'correlation': 'stage-correlation',
+    'vault': 'stage-complete',
+    'completed': 'stage-complete'
+  };
+
+  const stagePercentages = {
+    'stage-init': 10,
+    'stage-auth': 20,
+    'stage-passive': 35,
+    'stage-discovery': 50,
+    'stage-service': 65,
+    'stage-nse': 80,
+    'stage-correlation': 92,
+    'stage-complete': 100
+  };
+
+  const stageId = stageMap[stage];
+  if (stageId) {
+    const pill = document.getElementById(stageId);
+    if (pill) {
+      pill.className = 'stage-pill p-2 rounded-lg border border-blue-500 bg-blue-50 text-center transition shadow-sm';
+      const statusDiv = pill.querySelector('.stage-status');
+      if (statusDiv) {
+        statusDiv.innerText = 'Active';
+        statusDiv.className = 'stage-status text-[9px] text-blue-600 font-bold';
+      }
+    }
+
+    const pct = stagePercentages[stageId] || 20;
+    document.getElementById('overallProgressBar').style.width = pct + '%';
+    document.getElementById('overallPercentText').innerText = pct + '%';
+
+    if (stageId === 'stage-complete') {
+      document.getElementById('cancelScanBtn').classList.add('hidden');
+    }
+  }
+}
+
+function copyTerminalText() {
+  const terminal = document.getElementById('terminalBody');
+  navigator.clipboard.writeText(terminal.innerText).then(() => {
+    alert('Terminal logs copied to clipboard.');
+  });
+}
+
+function clearTerminal() {
+  document.getElementById('terminalBody').innerHTML = '';
+}
+
+function openCancelModal() {
+  document.getElementById('cancelModal').classList.remove('hidden');
+}
+
+function closeCancelModal() {
+  document.getElementById('cancelModal').classList.add('hidden');
+}
+
+async function confirmCancelScan() {
+  closeCancelModal();
+  try {
+    const resp = await fetch(`/api/v1/recon/${reconId}/cancel`, { method: 'POST' });
+    const data = await resp.json();
+    alert(data.message || 'Scan cancelled.');
+  } catch (err) {
+    alert('Failed to cancel scan: ' + err.message);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initSSE();
+});
+</script>
+{% endblock %}

@@ -65,6 +65,11 @@
           <span class="sidebar-label">Dashboard</span>
         </a>
 
+        <a href="/recon" class="flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-semibold transition {% if active_page == 'recon' %}bg-blue-50 text-blue-700 font-bold{% else %}text-slate-600 hover:text-slate-900 hover:bg-slate-100{% endif %}">
+          <i data-lucide="radar" class="w-4 h-4 flex-shrink-0"></i>
+          <span class="sidebar-label">Recon Campaigns</span>
+        </a>
+
         <a href="/investigations" class="flex items-center space-x-3 px-3 py-2.5 rounded-lg text-xs font-semibold transition {% if active_page == 'investigations' %}bg-blue-50 text-blue-700 font-bold{% else %}text-slate-600 hover:text-slate-900 hover:bg-slate-100{% endif %}">
           <i data-lucide="folder-search" class="w-4 h-4 flex-shrink-0"></i>
           <span class="sidebar-label">Investigations</span>
@@ -128,7 +133,11 @@
       </div>
 
       <div class="flex items-center space-x-3">
-        <a href="/scans" class="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium shadow-sm transition">
+        <a href="/recon/new" class="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium shadow-sm transition">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+          <span>New Recon</span>
+        </a>
+        <a href="/scans" class="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition">
           <i data-lucide="play" class="w-3.5 h-3.5"></i>
           <span>Launch Scan</span>
         </a>

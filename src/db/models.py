@@ -96,6 +96,7 @@ class ScanExecution(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     scan_id = Column(String(64), unique=True, nullable=False, index=True)  # e.g. "SCAN-20261110-12345"
+    recon_id = Column(String(64), nullable=True, index=True)  # e.g. "FIQ-REC-20261110-0001"
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False)
     scan_type = Column(String(50), nullable=False)  # 'passive', 'network_discovery', 'nmap_services', 'nmap_nse', 'greenbone', 'nessus', 'combined'
     target = Column(String(255), nullable=False)
@@ -134,9 +135,12 @@ class VulnerabilityFinding(Base):
     detection_source = Column(String(50), nullable=False)  # 'openvas', 'nse', 'nessus', 'correlated'
     scanner_vt_id = Column(String(100), nullable=True)
     remediation = Column(Text, nullable=True)
+    remediation_notes = Column(Text, nullable=True)
     evidence_reference = Column(String(255), nullable=True)
     verification_status = Column(String(50), default="unverified", nullable=False)
-    finding_status = Column(String(50), default="open", nullable=False)
+    finding_status = Column(String(50), default="open", nullable=False)  # open, in_progress, resolved, accepted_risk, false_positive
+    status_updated_by = Column(String(100), nullable=True)
+    status_updated_at = Column(DateTime, nullable=True)
     first_detected = Column(DateTime, default=utcnow, nullable=False)
     last_detected = Column(DateTime, default=utcnow, nullable=False)
 
@@ -170,8 +174,9 @@ class ReportRecord(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     report_id = Column(String(64), unique=True, nullable=False, index=True)
+    recon_id = Column(String(64), nullable=True, index=True)
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False)
-    report_type = Column(String(50), default="pdf", nullable=False)  # 'pdf', 'json'
+    report_type = Column(String(50), default="pdf", nullable=False)  # 'executive_pdf', 'technical_pdf', 'json'
     file_name = Column(String(255), nullable=False)
     file_size = Column(Integer, default=0, nullable=False)
     sha256_hash = Column(String(64), nullable=False)
@@ -195,9 +200,84 @@ class AuditLog(Base):
     user = relationship("User", back_populates="audit_logs")
 
 
+class ReconCampaign(Base):
+    __tablename__ = "recon_campaigns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recon_id = Column(String(64), unique=True, nullable=False, index=True)  # e.g. "FIQ-REC-20261110-0001"
+    investigation_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    purpose = Column(String(255), nullable=True)
+    scope_description = Column(Text, nullable=True)
+    target_type = Column(String(50), default="ipv4", nullable=False)  # 'ipv4', 'range', 'domain', 'hostname'
+    target_value = Column(String(255), nullable=False)
+    excluded_targets = Column(Text, nullable=True)
+    excluded_ports = Column(String(255), nullable=True)
+    allowed_methods = Column(String(255), default="all", nullable=False)
+    allowed_ports = Column(String(255), default="1-65535", nullable=False)
+    authorization_status = Column(String(50), default="Authorized", nullable=False)
+    authorized_by = Column(String(100), default="asip_ali", nullable=False)
+    authorized_at = Column(DateTime, default=utcnow, nullable=False)
+    status = Column(String(50), default="Draft", nullable=False)  # Draft, Pending Authorization, Authorized, Queued, Running, Completed, Partially Completed, Failed, Cancelled
+    selected_scan_types = Column(Text, nullable=True)
+    scan_config_json = Column(Text, nullable=True)
+    progress = Column(Integer, default=0, nullable=False)
+    current_stage = Column(String(100), nullable=True)
+    creator_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    creator = relationship("User")
+    events = relationship("ScanExecutionEvent", back_populates="campaign", cascade="all, delete-orphan")
+
+
+class ScanExecutionEvent(Base):
+    __tablename__ = "scan_execution_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(String(64), nullable=False, index=True)
+    recon_id = Column(String(64), ForeignKey("recon_campaigns.recon_id", ondelete="CASCADE"), nullable=True, index=True)
+    event_type = Column(String(50), default="log", nullable=False)  # 'stage_start', 'stage_complete', 'host_discovered', 'port_discovered', 'finding_discovered', 'warning', 'error', 'log'
+    stage = Column(String(100), nullable=True)
+    message = Column(Text, nullable=False)
+    details_json = Column(Text, nullable=True)
+    progress = Column(Integer, nullable=True)
+    timestamp = Column(DateTime, default=utcnow, nullable=False)
+
+    campaign = relationship("ReconCampaign", back_populates="events")
+
+
+class SavedScanProfile(Base):
+    __tablename__ = "saved_scan_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), default="general", nullable=False)
+    config_json = Column(Text, nullable=False)
+    is_builtin = Column(Boolean, default=False, nullable=False)
+    created_by = Column(String(100), default="system", nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+
+class RemediationHistory(Base):
+    __tablename__ = "remediation_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(String(64), nullable=False, index=True)
+    previous_status = Column(String(50), nullable=False)
+    new_status = Column(String(50), nullable=False)
+    changed_by = Column(String(100), nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+
 # Compound Indexes for optimal query performance
 Index("ix_vulnerability_target_port", VulnerabilityFinding.target_ip, VulnerabilityFinding.port)
 Index("ix_vulnerability_investigation_severity", VulnerabilityFinding.investigation_id, VulnerabilityFinding.severity)
 Index("ix_scan_investigation_status", ScanExecution.investigation_id, ScanExecution.status)
 Index("ix_evidence_investigation_type", EvidenceRecord.investigation_id, EvidenceRecord.evidence_type)
+Index("ix_scan_event_scan_timestamp", ScanExecutionEvent.scan_id, ScanExecutionEvent.timestamp)
+Index("ix_recon_campaign_status", ReconCampaign.status)
 

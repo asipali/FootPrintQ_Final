@@ -1,0 +1,549 @@
+{% extends "base.html" %}
+{% block title %}Results Dashboard — {{ campaign.name }} — FootprintIQ{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-7xl mx-auto">
+
+  <!-- Header Banner -->
+  <div class="fiq-card p-6 border-l-4 border-l-blue-600 bg-white reveal-on-scroll">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center space-x-2">
+          <span class="mono px-2 py-0.5 text-[11px] font-bold rounded bg-blue-50 text-blue-700 border border-blue-200">
+            {{ recon_id }}
+          </span>
+          <span class="text-xs text-slate-400">&bull; Comprehensive Recon &amp; Vulnerability Audit</span>
+        </div>
+        <h1 class="text-xl font-bold text-slate-900 mt-1">{{ campaign.name }}</h1>
+        <p class="text-xs text-slate-500 mt-0.5">
+          Target: <span class="mono font-bold text-slate-800">{{ campaign.target_value }}</span> &bull; Scope: Authorized Lab VM &bull; Status: <span class="capitalize font-semibold text-slate-700">{{ campaign.status }}</span>
+        </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <a href="/recon/{{ recon_id }}/live" class="inline-flex items-center space-x-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition">
+          <i data-lucide="terminal" class="w-4 h-4"></i>
+          <span>Live Console</span>
+        </a>
+        <button onclick="downloadReport('executive')" class="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold transition">
+          <i data-lucide="file-text" class="w-4 h-4"></i>
+          <span>Executive PDF</span>
+        </button>
+        <button onclick="downloadReport('technical')" class="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span>Technical PDF</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Exposure Score & Severity Breakdown Strip -->
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
+    <!-- Exposure Score -->
+    <div class="fiq-card p-5 bg-white reveal-on-scroll stagger-1">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Exposure Score</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold rounded {% if exposure.exposure_score >= 80 %}badge-critical{% elif exposure.exposure_score >= 50 %}badge-high{% elif exposure.exposure_score >= 25 %}badge-medium{% else %}badge-low{% endif %}">
+          {{ exposure.exposure_level }}
+        </span>
+      </div>
+      <div class="mt-3 flex items-baseline space-x-2">
+        <span class="text-3xl font-extrabold text-slate-900">{{ exposure.exposure_score }}</span>
+        <span class="text-xs font-medium text-slate-400">/ 100</span>
+      </div>
+      <div class="mt-2 text-[11px] text-slate-500">
+        Aggregate multi-engine risk metric
+      </div>
+    </div>
+
+    <!-- Critical Findings -->
+    <div class="fiq-card p-5 bg-white reveal-on-scroll stagger-2">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Critical Severity</span>
+        <span class="p-1.5 rounded-lg bg-rose-50 text-rose-600"><i data-lucide="alert-octagon" class="w-4 h-4"></i></span>
+      </div>
+      <div class="mt-3 flex items-baseline space-x-2">
+        <span class="text-3xl font-extrabold text-rose-600">{{ exposure.severity_counts.Critical }}</span>
+        <span class="text-xs font-medium text-slate-400">Immediate Action</span>
+      </div>
+      <div class="mt-2 text-[11px] text-slate-500">
+        High exploitability vulnerabilities
+      </div>
+    </div>
+
+    <!-- High & Medium Severity -->
+    <div class="fiq-card p-5 bg-white reveal-on-scroll stagger-3">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">High &amp; Medium</span>
+        <span class="p-1.5 rounded-lg bg-amber-50 text-amber-600"><i data-lucide="alert-triangle" class="w-4 h-4"></i></span>
+      </div>
+      <div class="mt-3 flex items-baseline space-x-2">
+        <span class="text-3xl font-extrabold text-amber-600">{{ exposure.severity_counts.High + exposure.severity_counts.Medium }}</span>
+        <span class="text-xs font-medium text-slate-400">Remediation Priority</span>
+      </div>
+      <div class="mt-2 text-[11px] text-slate-500">
+        {{ exposure.severity_counts.High }} High &bull; {{ exposure.severity_counts.Medium }} Medium
+      </div>
+    </div>
+
+    <!-- Total Findings -->
+    <div class="fiq-card p-5 bg-white reveal-on-scroll stagger-4">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Findings</span>
+        <span class="p-1.5 rounded-lg bg-blue-50 text-blue-600"><i data-lucide="shield" class="w-4 h-4"></i></span>
+      </div>
+      <div class="mt-3 flex items-baseline space-x-2">
+        <span class="text-3xl font-extrabold text-slate-900">{{ findings|length }}</span>
+        <span class="text-xs font-medium text-slate-400">Verified</span>
+      </div>
+      <div class="mt-2 text-[11px] text-slate-500">
+        {{ exposure.severity_counts.Low }} Low severity items
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabbed Results Container -->
+  <div class="fiq-card bg-white rounded-2xl overflow-hidden reveal-on-scroll">
+
+    <!-- Tab Bar -->
+    <div class="border-b border-slate-200 px-6 pt-4 flex items-center space-x-8">
+      <button onclick="switchTab('executive')" id="tabBtn-executive" class="pb-3 text-xs font-bold text-blue-600 border-b-2 border-blue-600 flex items-center space-x-2 transition">
+        <i data-lucide="briefcase" class="w-4 h-4"></i>
+        <span>Executive View</span>
+      </button>
+
+      <button onclick="switchTab('technical')" id="tabBtn-technical" class="pb-3 text-xs font-bold text-slate-400 hover:text-slate-700 flex items-center space-x-2 transition">
+        <i data-lucide="shield-alert" class="w-4 h-4"></i>
+        <span>Technical &amp; Remediation</span>
+      </button>
+
+      <button onclick="switchTab('comparison')" id="tabBtn-comparison" class="pb-3 text-xs font-bold text-slate-400 hover:text-slate-700 flex items-center space-x-2 transition">
+        <i data-lucide="git-compare" class="w-4 h-4"></i>
+        <span>Scan Comparison (Delta)</span>
+      </button>
+    </div>
+
+    <!-- =====================================================================
+         TAB 1: EXECUTIVE VIEW (Plain Language Risk Cards)
+         ===================================================================== -->
+    <div id="tabContent-executive" class="p-6 md:p-8 space-y-6">
+      <div>
+        <h2 class="text-base font-bold text-slate-900">Executive Summary &amp; Business Risk Posture</h2>
+        <p class="text-xs text-slate-500 mt-0.5">High-level strategic briefing designed for security leaders, risk officers, and stakeholders.</p>
+      </div>
+
+      <!-- Strategic Overview Callout -->
+      <div class="p-5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold text-slate-800">Target Asset Assessment: {{ campaign.target_value }}</span>
+          <span class="text-xs font-semibold text-rose-600">Action Required</span>
+        </div>
+        <p class="text-xs text-slate-600 leading-relaxed">
+          The reconnaissance campaign conducted on <span class="mono font-semibold">{{ campaign.target_value }}</span> revealed an aggregate Exposure Score of <span class="font-bold text-slate-900">{{ exposure.exposure_score }}/100 ({{ exposure.exposure_level }})</span>. A total of <span class="font-bold text-slate-900">{{ findings|length }}</span> security findings were correlated across passive OSINT and active reconnaissance engines.
+        </p>
+      </div>
+
+      <!-- Executive Findings Cards Grid -->
+      <div class="space-y-4">
+        <h3 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Top Priority Risk Insights</h3>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {% for f in findings[:4] %}
+          <div class="p-5 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition shadow-sm space-y-3">
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center space-x-2">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold {% if f.severity == 'Critical' %}badge-critical{% elif f.severity == 'High' %}badge-high{% elif f.severity == 'Medium' %}badge-medium{% else %}badge-info{% endif %}">
+                  {{ f.severity }}
+                </span>
+                <span class="mono text-xs font-bold text-slate-800">Port {{ f.port or 'Host' }}</span>
+              </div>
+              <span class="text-[10px] font-semibold text-slate-400 capitalize">{{ f.detection_source }}</span>
+            </div>
+
+            <div>
+              <h4 class="text-xs font-bold text-slate-900">{{ f.title }}</h4>
+              {% if f.cve_identifiers %}
+              <div class="mono text-[10px] text-blue-600 font-semibold mt-0.5">{{ f.cve_identifiers }}</div>
+              {% endif %}
+            </div>
+
+            <!-- Plain English 4-Part Structure -->
+            <div class="space-y-2 pt-2 border-t border-slate-100 text-[11px]">
+              <div>
+                <span class="font-bold text-slate-700">What was discovered?</span>
+                <p class="text-slate-500 mt-0.5">{{ f.description or 'Exposed network service running outdated or vulnerable daemon.' }}</p>
+              </div>
+              <div>
+                <span class="font-bold text-slate-700">Why does it matter?</span>
+                <p class="text-slate-500 mt-0.5">Allows unauthorized remote interaction without valid credentials or network boundary enforcement.</p>
+              </div>
+              <div>
+                <span class="font-bold text-slate-700">What could happen?</span>
+                <p class="text-rose-600 font-medium mt-0.5">Risk of remote code execution, system access, or sensitive credential disclosure.</p>
+              </div>
+              <div>
+                <span class="font-bold text-emerald-700">Recommended fix:</span>
+                <p class="text-slate-600 mt-0.5">{{ f.remediation_guidance or 'Upgrade the service package to the latest supported security patch, or restrict access via host firewall.' }}</p>
+              </div>
+            </div>
+          </div>
+          {% else %}
+          <div class="col-span-2 py-8 text-center text-xs text-slate-400">
+            No findings recorded for this campaign.
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- =====================================================================
+         TAB 2: TECHNICAL VIEW & REMEDIATION TRACKING
+         ===================================================================== -->
+    <div id="tabContent-technical" class="hidden p-6 md:p-8 space-y-6">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-base font-bold text-slate-900">Technical Vulnerability Inventory &amp; Remediation</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Manage lifecycle status, filter by scanner source or port, and record engineering remediation audit trails.</p>
+        </div>
+
+        <!-- Filter Controls -->
+        <div class="flex flex-wrap items-center gap-2">
+          <input type="text" id="techSearch" onkeyup="filterTechnicalTable()" placeholder="Search CVE, Title, Port..." class="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          
+          <select id="severityFilter" onchange="filterTechnicalTable()" class="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 focus:outline-none">
+            <option value="">All Severities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+
+          <select id="statusFilter" onchange="filterTechnicalTable()" class="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 focus:outline-none">
+            <option value="">All Statuses</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In Progress</option>
+            <option value="resolved">Resolved</option>
+            <option value="accepted_risk">Accepted Risk</option>
+            <option value="false_positive">False Positive</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Findings Table -->
+      <div class="overflow-x-auto">
+        <table class="fiq-table w-full" id="technicalFindingsTable">
+          <thead>
+            <tr>
+              <th>Finding ID</th>
+              <th>Target / Port</th>
+              <th>Severity</th>
+              <th>Title &amp; CVE</th>
+              <th>Scanner Source</th>
+              <th>Remediation Status</th>
+              <th class="text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in findings %}
+            <tr class="tech-row hover:bg-slate-50/80 transition" data-severity="{{ f.severity }}" data-status="{{ f.remediation_status or 'open' }}" data-text="{{ f.finding_id }} {{ f.title }} {{ f.cve_identifiers or '' }} {{ f.port or '' }}">
+              <td class="mono text-xs font-semibold text-slate-700">{{ f.finding_id }}</td>
+              <td class="mono text-xs font-bold text-slate-900">{{ f.target_ip }}:{{ f.port or 'all' }}</td>
+              <td>
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold {% if f.severity == 'Critical' %}badge-critical{% elif f.severity == 'High' %}badge-high{% elif f.severity == 'Medium' %}badge-medium{% else %}badge-info{% endif %}">
+                  {{ f.severity }}
+                </span>
+              </td>
+              <td class="max-w-xs">
+                <div class="font-bold text-xs text-slate-900 truncate" title="{{ f.title }}">{{ f.title }}</div>
+                {% if f.cve_identifiers %}
+                <div class="mono text-[10px] font-semibold text-blue-600">{{ f.cve_identifiers }}</div>
+                {% endif %}
+              </td>
+              <td>
+                <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 capitalize">
+                  {{ f.detection_source }}
+                </span>
+              </td>
+              <td>
+                <span id="badge-{{ f.finding_id }}" class="px-2 py-0.5 rounded-full text-[10px] font-bold capitalize {% if f.remediation_status == 'resolved' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif f.remediation_status == 'in_progress' %}bg-blue-50 text-blue-700 border border-blue-200{% elif f.remediation_status == 'accepted_risk' %}bg-slate-100 text-slate-700{% elif f.remediation_status == 'false_positive' %}bg-purple-50 text-purple-700 border border-purple-200{% else %}bg-rose-50 text-rose-700 border border-rose-200{% endif %}">
+                  {{ f.remediation_status or 'open' }}
+                </span>
+              </td>
+              <td class="text-right">
+                <button onclick="openRemediationModal('{{ f.finding_id }}', '{{ f.title|escape }}', '{{ f.remediation_status or 'open' }}', '{{ f.remediation_notes or '' }}')" class="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition" title="Update Remediation Status">
+                  <i data-lucide="edit-3" class="w-4 h-4"></i>
+                </button>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="7" class="py-12 text-center text-xs text-slate-400">
+                No technical vulnerability findings discovered.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- =====================================================================
+         TAB 3: SCAN COMPARISON (DELTA ANALYSIS)
+         ===================================================================== -->
+    <div id="tabContent-comparison" class="hidden p-6 md:p-8 space-y-6">
+      <div>
+        <h2 class="text-base font-bold text-slate-900">Scan Comparison &amp; Posture Drift</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Compare this reconnaissance campaign against a baseline or previous scan on the same target.</p>
+      </div>
+
+      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Select Comparison Baseline Campaign:</label>
+          <select id="compareSelect" class="w-80 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            {% for c in all_campaigns %}
+            {% if c.recon_id != recon_id %}
+            <option value="{{ c.recon_id }}">{{ c.recon_id }} — {{ c.name }} ({{ c.target_value }})</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </div>
+
+        <button onclick="loadComparisonDelta()" class="inline-flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition">
+          <i data-lucide="git-compare" class="w-4 h-4"></i>
+          <span>Execute Delta Comparison</span>
+        </button>
+      </div>
+
+      <!-- Comparison Results Placeholder / Container -->
+      <div id="comparisonResultsContainer" class="hidden space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div class="p-4 rounded-xl border border-slate-200 bg-white">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Score Delta</span>
+            <div id="compDeltaScore" class="mt-1 text-2xl font-extrabold text-slate-900">—</div>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-white">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">New Vulnerabilities</span>
+            <div id="compNewVulns" class="mt-1 text-2xl font-extrabold text-rose-600">—</div>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-white">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Resolved Findings</span>
+            <div id="compResolvedVulns" class="mt-1 text-2xl font-extrabold text-emerald-600">—</div>
+          </div>
+          <div class="p-4 rounded-xl border border-slate-200 bg-white">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Persistent Findings</span>
+            <div id="compPersistentVulns" class="mt-1 text-2xl font-extrabold text-slate-700">—</div>
+          </div>
+        </div>
+
+        <div id="compDetailsBox" class="p-4 rounded-xl border border-slate-200 bg-white text-xs text-slate-600">
+          Delta analysis completed.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Remediation Update Modal -->
+<div id="remediationModal" class="hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 space-y-4">
+    <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+      <div>
+        <h3 class="text-sm font-bold text-slate-900">Update Finding Remediation</h3>
+        <p id="modalFindingId" class="mono text-xs text-blue-600 font-semibold">—</p>
+      </div>
+      <button onclick="closeRemediationModal()" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    <div class="space-y-4 text-xs">
+      <div>
+        <label class="block font-bold text-slate-700 mb-1">Finding Title</label>
+        <p id="modalFindingTitle" class="p-2.5 bg-slate-50 rounded-lg text-slate-800 font-medium border border-slate-200">—</p>
+      </div>
+
+      <div>
+        <label class="block font-bold text-slate-700 mb-1">Lifecycle Remediation Status</label>
+        <select id="modalStatusSelect" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="open">Open (Unresolved)</option>
+          <option value="in_progress">In Progress (Engineering engaged)</option>
+          <option value="resolved">Resolved (Patch verified)</option>
+          <option value="accepted_risk">Accepted Risk (Documented exception)</option>
+          <option value="false_positive">False Positive (Audited non-issue)</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block font-bold text-slate-700 mb-1">Remediation Notes / Audit Rationale</label>
+        <textarea id="modalNotesText" rows="3" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="e.g. Upgraded vsftpd to 3.0.5, tested anonymous access disabled."></textarea>
+      </div>
+    </div>
+
+    <div class="pt-3 border-t border-slate-100 flex justify-end space-x-2">
+      <button onclick="closeRemediationModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition">
+        Cancel
+      </button>
+      <button onclick="saveRemediationStatus()" id="saveRemediationBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition">
+        Save Status
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+const reconId = '{{ recon_id }}';
+let activeFindingId = null;
+
+function switchTab(tabKey) {
+  ['executive', 'technical', 'comparison'].forEach(key => {
+    const btn = document.getElementById(`tabBtn-${key}`);
+    const content = document.getElementById(`tabContent-${key}`);
+    if (key === tabKey) {
+      btn.className = 'pb-3 text-xs font-bold text-blue-600 border-b-2 border-blue-600 flex items-center space-x-2 transition';
+      content.classList.remove('hidden');
+    } else {
+      btn.className = 'pb-3 text-xs font-bold text-slate-400 hover:text-slate-700 flex items-center space-x-2 transition';
+      content.classList.add('hidden');
+    }
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+function filterTechnicalTable() {
+  const query = document.getElementById('techSearch').value.toLowerCase();
+  const severity = document.getElementById('severityFilter').value;
+  const status = document.getElementById('statusFilter').value;
+
+  const rows = document.querySelectorAll('.tech-row');
+  rows.forEach(r => {
+    const textMatch = !query || r.getAttribute('data-text').toLowerCase().includes(query);
+    const sevMatch = !severity || r.getAttribute('data-severity') === severity;
+    const statMatch = !status || r.getAttribute('data-status') === status;
+    r.style.display = (textMatch && sevMatch && statMatch) ? '' : 'none';
+  });
+}
+
+function openRemediationModal(findingId, title, currentStatus, currentNotes) {
+  activeFindingId = findingId;
+  document.getElementById('modalFindingId').innerText = findingId;
+  document.getElementById('modalFindingTitle').innerText = title;
+  document.getElementById('modalStatusSelect').value = currentStatus;
+  document.getElementById('modalNotesText').value = currentNotes || '';
+  document.getElementById('remediationModal').classList.remove('hidden');
+  if (window.lucide) lucide.createIcons();
+}
+
+function closeRemediationModal() {
+  document.getElementById('remediationModal').classList.add('hidden');
+  activeFindingId = null;
+}
+
+async function saveRemediationStatus() {
+  if (!activeFindingId) return;
+  const btn = document.getElementById('saveRemediationBtn');
+  btn.disabled = true;
+  btn.innerText = 'Saving...';
+
+  const newStatus = document.getElementById('modalStatusSelect').value;
+  const notes = document.getElementById('modalNotesText').value;
+
+  try {
+    const resp = await fetch(`/api/v1/recon/${reconId}/remediation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        finding_id: activeFindingId,
+        status: newStatus,
+        notes: notes
+      })
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Failed to update remediation status');
+    }
+
+    // Update row badge
+    const badge = document.getElementById(`badge-${activeFindingId}`);
+    if (badge) {
+      badge.innerText = newStatus;
+      badge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ';
+      if (newStatus === 'resolved') badge.className += 'bg-emerald-50 text-emerald-700 border border-emerald-200';
+      else if (newStatus === 'in_progress') badge.className += 'bg-blue-50 text-blue-700 border border-blue-200';
+      else if (newStatus === 'accepted_risk') badge.className += 'bg-slate-100 text-slate-700';
+      else if (newStatus === 'false_positive') badge.className += 'bg-purple-50 text-purple-700 border border-purple-200';
+      else badge.className += 'bg-rose-50 text-rose-700 border border-rose-200';
+    }
+
+    const row = badge?.closest('.tech-row');
+    if (row) row.setAttribute('data-status', newStatus);
+
+    closeRemediationModal();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerText = 'Save Status';
+  }
+}
+
+async function downloadReport(reportFormat) {
+  try {
+    const resp = await fetch('/api/v1/reports/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        investigation_id: reconId,
+        report_format: reportFormat,
+        title: `FootprintIQ ${reportFormat.toUpperCase()} Report — ${reconId}`
+      })
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Report generation failed');
+    }
+
+    const result = await resp.json();
+    if (result.download_url) {
+      window.open(result.download_url, '_blank');
+    } else {
+      alert(`Report generated: ${result.report_file}`);
+    }
+  } catch (err) {
+    alert('Report generation error: ' + err.message);
+  }
+}
+
+async function loadComparisonDelta() {
+  const otherId = document.getElementById('compareSelect').value;
+  if (!otherId) return;
+
+  try {
+    const resp = await fetch(`/api/v1/recon/${reconId}/compare/${otherId}`);
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Comparison failed');
+    }
+
+    const data = await resp.json();
+    document.getElementById('comparisonResultsContainer').classList.remove('hidden');
+    document.getElementById('compDeltaScore').innerText = (data.exposure_score_delta >= 0 ? '+' : '') + data.exposure_score_delta;
+    document.getElementById('compNewVulns').innerText = data.new_findings ? data.new_findings.length : 0;
+    document.getElementById('compResolvedVulns').innerText = data.resolved_findings ? data.resolved_findings.length : 0;
+    document.getElementById('compPersistentVulns').innerText = data.persistent_findings ? data.persistent_findings.length : 0;
+
+    const detailsBox = document.getElementById('compDetailsBox');
+    detailsBox.innerHTML = `
+      <div class="font-bold text-slate-800 mb-2">Delta Comparison Summary:</div>
+      <div>Comparing Current <span class="mono font-bold">${reconId}</span> vs Baseline <span class="mono font-bold">${otherId}</span>.</div>
+      <div class="mt-1 text-slate-500">Port Changes: ${data.port_changes ? JSON.stringify(data.port_changes) : 'None'}</div>
+    `;
+  } catch (err) {
+    alert('Failed to execute delta comparison: ' + err.message);
+  }
+}
+</script>
+{% endblock %}
