@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Evidence Management (SeaweedFS) — FootprintIQ Enterprise{% endblock %}
+{% block title %}Evidence Catalog — FootprintIQ Enterprise{% endblock %}
 
 {% block content %}
 <div class="space-y-6 max-w-7xl mx-auto">
@@ -7,12 +7,12 @@
   <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold text-slate-900">SeaweedFS Cryptographic Evidence Catalog</h1>
-      <p class="text-xs text-slate-500 mt-0.5">Distributed object storage preservation of raw tool outputs with SHA-256 checksums</p>
+      <p class="text-xs text-slate-500 mt-0.5">Integrity-verified preservation of raw scan artifacts and assessment outputs with SHA-256 digests</p>
     </div>
     <div class="flex items-center space-x-2">
       <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
         <span class="w-2 h-2 mr-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-        SeaweedFS Cluster Online (9333 / 8080)
+        Evidence Vault Ready
       </span>
     </div>
   </div>
@@ -27,7 +27,7 @@
             <th>File Name &amp; Artifact Type</th>
             <th>Size</th>
             <th>SHA-256 Integrity Checksum</th>
-            <th>SeaweedFS File ID (FID)</th>
+            <th>Archive Reference</th>
             <th>Actions</th>
           </tr>
         </thead>

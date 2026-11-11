@@ -1,18 +1,23 @@
 """
 FootprintIQ - Scans Execution Router
 Endpoints:
-- POST /api/v1/scans (Launch authorized scan execution)
-- GET  /api/v1/scans (List all scans)
+- POST /api/v1/scans (Launch authorized scan execution - Investigator owner/shared only)
+- GET  /api/v1/scans (List scans - Admin all, Investigator owner/shared)
 - GET  /api/v1/scans/{scan_id} (Scan execution details & status)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 from src.db.repository import FootprintIQRepository
 from src.orchestration.unified_orchestrator import UnifiedScanOrchestrator
 from src.authorization.target_authorizer import TargetAuthorizationError
-from src.api.dependencies import get_repository, get_current_user
+from src.api.dependencies import get_repository, get_current_user, require_investigator
+from src.services.rbac_service import (
+    enforce_investigation_access,
+    filter_accessible_investigation_ids,
+    record_security_audit,
+)
 
 router = APIRouter(prefix="/api/v1/scans", tags=["Scans"])
 
@@ -24,7 +29,7 @@ class LaunchScanRequest(BaseModel):
         example="combined",
         description="One of: 'passive', 'network_discovery', 'nmap_services', 'nmap_nse', 'greenbone', 'nessus', 'combined'"
     )
-    target: str = Field(..., example="192.168.56.111")
+    target: str = Field(..., example="192.0.2.10")
     profile: Optional[str] = Field("lab-basic", example="lab-basic")
     custom_scripts: Optional[List[str]] = Field(None, example=["ftp-vsftpd-backdoor", "http-title"])
 
@@ -33,9 +38,18 @@ class LaunchScanRequest(BaseModel):
 @router.post("/", status_code=status.HTTP_200_OK, include_in_schema=False)
 def launch_scan(
     req: LaunchScanRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
+    enforce_investigation_access(
+        repo,
+        current_user,
+        req.investigation_id,
+        require_execution=True,
+        request=request,
+        action_label="SCAN_LAUNCH",
+    )
     orchestrator = UnifiedScanOrchestrator(repo=repo)
 
     # 1. Global target authorization & syntax safety check (Fail-closed upfront)
@@ -52,18 +66,12 @@ def launch_scan(
                 )
         except TargetAuthorizationError as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
-    # 2. Verify investigation exists
-    inv = repo.get_investigation(req.investigation_id)
-    if not inv:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Investigation '{req.investigation_id}' not found. Cannot launch scan."
-        )
-
-    # 3. Verify target is registered under this specific investigation
+    # 2. Verify target is registered under this specific investigation
     if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "greenbone", "nessus", "combined"):
         try:
             orchestrator.authorizer.authorize_target(
@@ -89,11 +97,14 @@ def launch_scan(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=err_msg)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg)
 
-        repo.log_audit(
-            user_id=current_user.get("user_id", 1),
+        record_security_audit(
+            repo,
+            user=current_user,
             action="SCAN_EXECUTED",
             target_resource=req.target,
-            details_json=f'{{"scan_type": "{req.scan_type}", "status": "{result.get("status")}"}}'
+            details={"investigation_id": req.investigation_id, "scan_type": req.scan_type, "status": result.get("status")},
+            outcome="SUCCESS",
+            request=request,
         )
         return result
     except HTTPException:
@@ -109,18 +120,38 @@ def launch_scan(
 @router.get("")
 @router.get("/", include_in_schema=False)
 def list_scans(
+    request: Request,
     investigation_id: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
-    return repo.list_scans(investigation_id=investigation_id)
+    if investigation_id:
+        enforce_investigation_access(repo, current_user, investigation_id, request=request, action_label="SCAN_LIST")
+        return repo.list_scans(investigation_id=investigation_id)
+
+    scans = repo.list_scans()
+    accessible = filter_accessible_investigation_ids(repo, current_user)
+    if accessible is None:
+        return scans
+    return [s for s in scans if (s.get("investigation_id") in accessible or s.get("recon_id") in accessible)]
 
 
 @router.get("/{scan_id}")
-def get_scan(scan_id: str, repo: FootprintIQRepository = Depends(get_repository)):
-    scans = repo.list_scans()
-    for s in scans:
-        if s.get("scan_id") == scan_id:
-            findings = [f for f in repo.list_findings() if f.get("scan_id") == scan_id]
-            return {**s, "findings": findings, "findings_count": len(findings)}
+def get_scan(
+    scan_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    scan = repo.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Scan '{scan_id}' not found.")
 
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Scan '{scan_id}' not found.")
+    inv_id = scan.get("investigation_id") or scan.get("recon_id")
+    if inv_id:
+        enforce_investigation_access(repo, current_user, inv_id, request=request, action_label="SCAN_VIEW")
+    elif current_user.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+
+    findings = [f for f in repo.list_findings(investigation_id=inv_id) if f.get("scan_id") == scan_id]
+    return {**scan, "findings": findings, "findings_count": len(findings)}

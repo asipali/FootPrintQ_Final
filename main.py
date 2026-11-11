@@ -236,7 +236,7 @@ Examples:
         print(f"   Listening on: http://{args.host}:{args.port}")
         print(f"   API Documentation: http://{args.host}:{args.port}/docs")
         print("=" * 72)
-        uvicorn.run("src.api.app:app", host=args.host, port=args.port, reload=False)
+        uvicorn.run("src.api.app:app", host=args.host, port=args.port, reload=False, server_header=False)
         sys.exit(0)
 
     elif args.health:

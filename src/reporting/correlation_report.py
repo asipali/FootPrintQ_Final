@@ -463,7 +463,7 @@ class CorrelationReportGenerator:
         # ---------------------------------------------------------
         story.append(Paragraph("8. Defensive Observations & Recommendations", self.styles["H1"]))
         story.append(Paragraph("<b>Defensive Observations:</b>", self.styles["H2"]))
-        story.append(Paragraph("• <b>Environment Isolation:</b> Private laboratory assets (e.g. Metasploitable2 on 192.168.56.0/24) exhibit zero verified linkages to external public domains.", self.styles["Observation"]))
+        story.append(Paragraph("• <b>Environment Isolation:</b> Private internal assets exhibit zero verified linkages to external public domains.", self.styles["Observation"]))
         story.append(Paragraph("• <b>Exposure Surface:</b> Active scan findings identify listening services with banners. Open ports represent service exposure rather than verified vulnerabilities.", self.styles["Observation"]))
         story.append(Paragraph("• <b>Plaintext Transmission:</b> Legacy unencrypted protocols (Telnet, FTP, Rsh) observed on lab endpoints require replacement with encrypted counterparts.", self.styles["Observation"]))
         story.append(Spacer(1, 4))

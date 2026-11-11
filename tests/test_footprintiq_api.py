@@ -11,8 +11,8 @@ class TestFootprintIQAPI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(app)
-        # Authenticate admin
-        resp = cls.client.post("/api/v1/auth/login", json={"username": "admin", "password": "AdminPass2026!"})
+        # Authenticate approved investigator
+        resp = cls.client.post("/api/v1/auth/login", json={"username": "investigator1", "password": "Investigator1Pass2026!"})
         cls.token = resp.json().get("access_token")
         cls.headers = {"Authorization": f"Bearer {cls.token}"}
 
@@ -48,11 +48,19 @@ class TestFootprintIQAPI(unittest.TestCase):
         self.assertEqual(get_resp.json()["title"], "Automated Unit Test Investigation")
 
     def test_targets_endpoint(self):
+        inv_resp = self.client.post(
+            "/api/v1/investigations",
+            json={"title": "Targets Unit Investigation", "description": "Scope setup"},
+            headers=self.headers
+        )
+        self.assertEqual(inv_resp.status_code, 201)
+        inv_id = inv_resp.json()["investigation_id"]
+
         # Add target
         target_resp = self.client.post(
             "/api/v1/targets",
             json={
-                "investigation_id": "INV-UNIT-01",
+                "investigation_id": inv_id,
                 "target": "192.168.56.111",
                 "name": "Metasploitable2 VM",
                 "scope": "192.168.56.0/24"
@@ -68,10 +76,18 @@ class TestFootprintIQAPI(unittest.TestCase):
         self.assertTrue(any(t["target"] == "192.168.56.111" for t in list_resp.json()))
 
     def test_scan_unauthorized_target_rejection(self):
+        inv_resp = self.client.post(
+            "/api/v1/investigations",
+            json={"title": "Unauthorized Target Reject Inv", "description": "Scope check"},
+            headers=self.headers
+        )
+        self.assertEqual(inv_resp.status_code, 201)
+        inv_id = inv_resp.json()["investigation_id"]
+
         resp = self.client.post(
             "/api/v1/scans",
             json={
-                "investigation_id": "INV-UNIT-01",
+                "investigation_id": inv_id,
                 "scan_type": "nmap_nse",
                 "target": "8.8.8.8"
             },

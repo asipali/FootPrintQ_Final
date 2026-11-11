@@ -25,39 +25,72 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.db.repository import FootprintIQRepository
+from src.db.repository import (
+    FootprintIQRepository, DatabaseIntegrityError, ConcurrencyConflictError, EntityNotFoundError
+)
 from src.orchestration.execution_manager import ExecutionManager
-from src.authorization.target_authorizer import TargetAuthorizer, TargetAuthorizationError
-from src.api.dependencies import get_repository, get_current_user
+from src.authorization.target_authorizer import TargetAuthorizer, TargetAuthorizationError, TargetSyntaxError
+from src.collectors.nmap_collector import parse_and_validate_ports, NmapCollector
+from src.services.scan_options_service import ScanOptionsService
+from src.services.recon_results_helper import load_campaign_results_bundle, enrich_findings_with_explanations
+from src.services.nse_policy_service import NSEPolicyService
+from src.services.rbac_service import (
+    enforce_investigation_access,
+    filter_accessible_investigation_ids,
+    is_admin_user,
+    record_security_audit,
+)
+from src.api.dependencies import get_repository, get_current_user, require_investigator
 
 router = APIRouter(prefix="/api/v1/recon", tags=["Recon Campaigns"])
 
 
 class CreateReconRequest(BaseModel):
-    name: str = Field(..., example="Perimeter Reconnaissance 2026")
-    target_value: str = Field(..., example="192.168.56.111")
-    target_type: str = Field("ipv4", example="ipv4", description="'ipv4', 'range', 'domain'")
-    description: Optional[str] = Field("", example="Comprehensive active & passive perimeter audit")
+    name: str = Field(..., example="External Security Assessment")
+    target_value: str = Field(..., example="192.0.2.10")
+    targets: Optional[List[str]] = Field(None, example=["192.0.2.10"])
+    target_type: str = Field("ipv4", example="ipv4", description="'ipv4', 'range', 'domain', 'hostname'")
+    description: Optional[str] = Field("", example="Authorized security reconnaissance campaign")
     purpose: Optional[str] = Field("Security Audit", example="Security Audit")
-    scope_description: Optional[str] = Field("", example="192.168.56.111 Metasploitable2 Lab VM")
-    excluded_targets: Optional[str] = Field("", example="192.168.56.1")
+    scope_description: Optional[str] = Field("", example="Authorized target infrastructure scope")
+    excluded_targets: Optional[str] = Field("", example="192.0.2.1")
     excluded_ports: Optional[str] = Field("", example="25,135")
     allowed_methods: Optional[str] = Field("all", example="all")
     allowed_ports: Optional[str] = Field("1-65535", example="1-65535")
-    selected_scan_types: Optional[str] = Field("combined", example="combined")
+    selected_scan_types: Optional[str] = Field("combined", example="draft")
     scan_config_json: Optional[str] = Field("{}", example="{}")
+    authorization_confirmed: bool = Field(True, example=True)
+    idempotency_key: Optional[str] = Field(None, example="IDEMP-20261111-001")
+
+
+class UpdateReconRequest(BaseModel):
+    name: Optional[str] = None
+    target_value: Optional[str] = None
+    targets: Optional[List[str]] = None
+    target_type: Optional[str] = None
+    description: Optional[str] = None
+    purpose: Optional[str] = None
+    scope_description: Optional[str] = None
+    excluded_targets: Optional[str] = None
+    excluded_ports: Optional[str] = None
+    allowed_ports: Optional[str] = None
+    selected_scan_types: Optional[str] = None
+    scan_config_json: Optional[str] = None
+    authorization_confirmed: bool = True
+    version_id: Optional[int] = None
 
 
 class StartReconRequest(BaseModel):
-    scan_type: Optional[str] = Field("combined", example="combined")
-    profile: Optional[str] = Field("lab-basic", example="lab-basic")
-    custom_scripts: Optional[List[str]] = Field(None, example=["ftp-vsftpd-backdoor", "http-title"])
+    scan_type: Optional[str] = Field(None, example="passive")
+    profile: Optional[str] = Field("lab-basic", example="standard")
+    custom_scripts: Optional[List[str]] = Field(None, example=["http-title", "ssl-cert"])
 
 
 class RemediationUpdateRequest(BaseModel):
     finding_id: str = Field(..., example="VULN-20261110-001")
     status: str = Field(..., example="resolved", description="'open', 'in_progress', 'resolved', 'accepted_risk', 'false_positive'")
     notes: Optional[str] = Field("", example="Backdoor FTP daemon replaced with patched vsftpd 3.0.5")
+    expected_version: Optional[int] = Field(None, example=1)
 
 
 class SaveProfileRequest(BaseModel):
@@ -67,64 +100,337 @@ class SaveProfileRequest(BaseModel):
     config_json: str = Field(..., example='{"ports": "80,443,8080", "service_detection": true}')
 
 
+class ValidatePortsRequest(BaseModel):
+    ports_spec: str = Field(..., example="22,80,443,3306,8080")
+
+
+def _validate_campaign_configuration(
+    target_value: str,
+    targets_list: Optional[List[str]],
+    excluded_targets: Optional[str],
+    excluded_ports: Optional[str],
+    selected_scan_types: Optional[str],
+    scan_config_json: Optional[str],
+    authorization_confirmed: bool,
+    operator: str
+) -> Dict[str, Any]:
+    """Validates scope, targets, ports, NSE scripts, and scanner capability honesty."""
+    try:
+        cfg = json.loads(scan_config_json or "{}") if isinstance(scan_config_json, str) else (scan_config_json or {})
+        if not isinstance(cfg, dict):
+            raise ValueError("Invalid configuration object.")
+    except json.JSONDecodeError:
+        raise ValueError("Invalid configuration JSON formatting.")
+
+    raw_targets = targets_list or cfg.get("targets") or [t.strip() for t in str(target_value or "").split(",") if t.strip()]
+    selected_cats = [str(c).lower() for c in (cfg.get("selected_categories") or []) if str(c).strip().lower() in ("passive", "active", "vulnerability")]
+    is_draft = (selected_scan_types or "").lower() == "draft" and not selected_cats
+
+    if not authorization_confirmed and not is_draft:
+        raise TargetAuthorizationError("Explicit authorization confirmation is required before configuring or starting a campaign.")
+
+    if is_draft:
+        scope_mode = "draft"
+    elif selected_cats:
+        scope_mode = "passive" if selected_cats == ["passive"] else "combined"
+    elif (selected_scan_types or "").lower() == "passive":
+        scope_mode = "passive"
+    else:
+        scope_mode = "combined"
+
+    authorizer = TargetAuthorizer()
+    auth_info = authorizer.authorize_campaign_targets(
+        targets=raw_targets,
+        scope_mode=scope_mode,
+        excluded_targets=excluded_targets,
+        explicit_authorization=authorization_confirmed,
+        operator=operator
+    )
+
+    # Validate custom ports, port ranges, UDP ports & excluded ports strictly
+    if excluded_ports and excluded_ports.strip():
+        parse_and_validate_ports(excluded_ports.strip())
+
+    active_cfg = cfg.get("active") or {}
+    if isinstance(active_cfg, dict) and active_cfg:
+        custom_ports = (active_cfg.get("custom_ports") or "").strip()
+        if active_cfg.get("port_mode") == "custom" or custom_ports:
+            active_cfg["custom_ports"] = parse_and_validate_ports(custom_ports)
+        port_range = (active_cfg.get("port_range") or "").strip()
+        if active_cfg.get("port_mode") == "port_range" or port_range:
+            active_cfg["port_range"] = parse_and_validate_ports(port_range)
+        udp_ports = (active_cfg.get("udp_ports") or "").strip()
+        if active_cfg.get("udp_port_mode") == "udp_selected" or udp_ports:
+            active_cfg["udp_ports"] = parse_and_validate_ports(udp_ports)
+        ex_ports = (active_cfg.get("exclude_ports") or "").strip()
+        if ex_ports:
+            active_cfg["exclude_ports"] = parse_and_validate_ports(ex_ports)
+        # Validate safe Nmap options against actual host capabilities
+        NmapCollector().build_safe_custom_args(active_cfg)
+
+    # Validate NSE scripts & normalize multi-engine list
+    vuln_cfg = cfg.get("vulnerability") or {}
+    if isinstance(vuln_cfg, dict):
+        if vuln_cfg.get("nse_scripts"):
+            approved, rejected = NSEPolicyService.validate_scripts(vuln_cfg["nse_scripts"], allow_vuln_checks=True)
+            if rejected:
+                raise ValueError(f"Unauthorized or unknown NSE script(s): {', '.join(rejected)}")
+            vuln_cfg["nse_scripts"] = approved
+        raw_engines = vuln_cfg.get("engines")
+        if isinstance(raw_engines, list):
+            clean_engines = [str(e).lower() for e in raw_engines if str(e).lower() in ("nse", "nessus", "greenbone")]
+            vuln_cfg["engines"] = clean_engines
+            if clean_engines == ["nessus", "greenbone"] or (len(clean_engines) >= 2 and "nessus" in clean_engines and "greenbone" in clean_engines):
+                vuln_cfg.setdefault("engine", "combined")
+            elif len(clean_engines) == 1:
+                vuln_cfg.setdefault("engine", clean_engines[0])
+
+    cfg["targets"] = [t["target"] for t in auth_info["targets"]]
+    if selected_cats:
+        cfg["selected_categories"] = selected_cats
+
+    return {
+        "primary_target": auth_info["primary_target"],
+        "primary_type": auth_info["primary_type"],
+        "targets_meta": auth_info["targets"],
+        "is_draft": is_draft,
+        "selected_categories": selected_cats,
+        "normalized_config_json": json.dumps(cfg)
+    }
+
+
+@router.get("/options")
+def get_recon_options(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Returns real-time Passive, Active, and Vulnerability options catalog with scanner readiness."""
+    return ScanOptionsService.get_full_catalog()
+
+
+@router.post("/validate-ports")
+def validate_ports_endpoint(
+    req: ValidatePortsRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Validates custom port list / ranges without executing any network traffic."""
+    try:
+        normalized = parse_and_validate_ports(req.ports_spec)
+        return {"valid": True, "normalized": normalized}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_recon_campaign(
     req: CreateReconRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
-    # Validate target syntax & global scope upfront
-    authorizer = TargetAuthorizer()
+    if not (req.name or "").strip() or not (req.target_value or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Recon Name and Target are required.")
+    if req.purpose is not None and not req.purpose.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Purpose cannot be empty.")
+
+    operator = current_user.get("username", "asip_ali")
     try:
-        clean_target, _ = authorizer.validate_target_syntax(req.target_value)
+        val = _validate_campaign_configuration(
+            target_value=req.target_value,
+            targets_list=req.targets,
+            excluded_targets=req.excluded_targets,
+            excluded_ports=req.excluded_ports,
+            selected_scan_types=req.selected_scan_types,
+            scan_config_json=req.scan_config_json,
+            authorization_confirmed=req.authorization_confirmed,
+            operator=operator
+        )
+    except TargetAuthorizationError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ConcurrencyConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    idemp_key = req.idempotency_key or request.headers.get("X-Idempotency-Key")
+    is_draft = bool(val.get("is_draft"))
+
+    try:
+        campaign = repo.create_recon_campaign(
+            name=req.name.strip(),
+            target_value=val["primary_target"],
+            target_type=val["primary_type"] or req.target_type,
+            description=req.description or "",
+            purpose=(req.purpose or "Security Audit").strip(),
+            scope_description=req.scope_description or "",
+            excluded_targets=req.excluded_targets or "",
+            excluded_ports=req.excluded_ports or "",
+            allowed_methods=req.allowed_methods or "all",
+            allowed_ports=req.allowed_ports or "1-65535",
+            authorized_by=operator,
+            creator_id=current_user.get("id", current_user.get("user_id", 1)),
+            selected_scan_types=req.selected_scan_types or "combined",
+            scan_config_json=val["normalized_config_json"],
+            initial_status="Draft" if is_draft else "Authorized",
+            initial_stage="Initialized" if is_draft else "Configured",
+            authorization_status=("Authorized" if req.authorization_confirmed else "Pending") if is_draft else "Authorized",
+            idempotency_key=idemp_key
+        )
+        # Register any additional multi-targets in DB authorization scope
+        for extra in val["targets_meta"][1:]:
+            try:
+                repo.add_authorized_target(
+                    investigation_id=campaign["recon_id"],
+                    target=extra["target"],
+                    name=f"{req.name} ({extra['target']})",
+                    scope=extra.get("scope_basis", "Authorized Campaign Scope"),
+                    permitted_profiles="lab-basic,lab-safe-minimal,lab-common-services",
+                    allowed_ports=req.allowed_ports or "1-65535",
+                    authorized_by=operator
+                )
+            except Exception:
+                pass
+    except DatabaseIntegrityError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    record_security_audit(
+        repo,
+        user=current_user,
+        action="RECON_CAMPAIGN_CREATED",
+        target_resource=campaign["recon_id"],
+        details={"target": campaign.get("target_value"), "status": campaign.get("status")},
+        outcome="SUCCESS",
+        request=request,
+    )
+    return campaign
+
+
+@router.put("/{recon_id}")
+def update_recon_campaign_config(
+    recon_id: str,
+    req: UpdateReconRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    """Updates campaign configuration during Pre-Scan Review ('Edit Configuration')."""
+    camp = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        require_execution=True,
+        request=request,
+        action_label="RECON_CONFIG_UPDATE",
+    )
+    if camp.get("status") in ("Running", "Queued"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot edit a campaign while scan execution is active.")
+
+    operator = current_user.get("username", "asip_ali")
+    eff_target = req.target_value or camp.get("target_value", "")
+    eff_scan_types = req.selected_scan_types or camp.get("selected_scan_types", "combined")
+    eff_cfg = req.scan_config_json if req.scan_config_json is not None else (camp.get("scan_config_json") or "{}")
+    eff_excl_t = req.excluded_targets if req.excluded_targets is not None else camp.get("excluded_targets", "")
+    eff_excl_p = req.excluded_ports if req.excluded_ports is not None else camp.get("excluded_ports", "")
+
+    try:
+        val = _validate_campaign_configuration(
+            target_value=eff_target,
+            targets_list=req.targets,
+            excluded_targets=eff_excl_t,
+            excluded_ports=eff_excl_p,
+            selected_scan_types=eff_scan_types,
+            scan_config_json=eff_cfg,
+            authorization_confirmed=req.authorization_confirmed,
+            operator=operator
+        )
     except TargetAuthorizationError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    campaign = repo.create_recon_campaign(
-        name=req.name,
-        target_value=clean_target,
-        target_type=req.target_type,
-        description=req.description or "",
-        purpose=req.purpose or "Security Audit",
-        scope_description=req.scope_description or "",
-        excluded_targets=req.excluded_targets or "",
-        excluded_ports=req.excluded_ports or "",
-        allowed_methods=req.allowed_methods or "all",
-        allowed_ports=req.allowed_ports or "1-65535",
-        authorized_by=current_user.get("username", "asip_ali"),
-        creator_id=current_user.get("user_id", 1),
-        selected_scan_types=req.selected_scan_types or "combined",
-        scan_config_json=req.scan_config_json or "{}"
-    )
+    updates = {
+        "name": req.name or camp["name"],
+        "target_value": val["primary_target"],
+        "target_type": val["primary_type"],
+        "description": req.description if req.description is not None else camp.get("description", ""),
+        "purpose": req.purpose or camp.get("purpose", "Security Audit"),
+        "scope_description": req.scope_description if req.scope_description is not None else camp.get("scope_description", ""),
+        "excluded_targets": eff_excl_t,
+        "excluded_ports": eff_excl_p,
+        "allowed_ports": req.allowed_ports or camp.get("allowed_ports", "1-65535"),
+        "selected_scan_types": eff_scan_types,
+        "scan_config_json": val["normalized_config_json"]
+    }
+    if not val.get("is_draft") and val.get("selected_categories"):
+        updates["status"] = "Authorized"
+        updates["current_stage"] = "Configured"
+        if req.authorization_confirmed:
+            updates["authorization_status"] = "Authorized"
+    try:
+        repo.update_recon_campaign(recon_id, expected_version=req.version_id, **updates)
+        # Ensure all validated targets exist in DB authorized targets
+        existing_targets = {t.get("target") for t in repo.list_authorized_targets(investigation_id=recon_id)}
+        for extra in val["targets_meta"]:
+            if extra["target"] not in existing_targets:
+                try:
+                    repo.add_authorized_target(
+                        investigation_id=recon_id,
+                        target=extra["target"],
+                        name=f"{updates['name']} ({extra['target']})",
+                        scope=extra.get("scope_basis", "Authorized Campaign Scope"),
+                        permitted_profiles="lab-basic,lab-safe-minimal,lab-common-services",
+                        allowed_ports=updates["allowed_ports"],
+                        authorized_by=operator
+                    )
+                except Exception:
+                    pass
+    except ConcurrencyConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
-    repo.log_audit(
-        user_id=current_user.get("user_id", 1),
-        action="RECON_CAMPAIGN_CREATED",
-        target_resource=clean_target,
-        details_json=json.dumps({"recon_id": campaign["recon_id"], "name": req.name})
+    record_security_audit(
+        repo,
+        user=current_user,
+        action="RECON_CONFIG_UPDATED",
+        target_resource=recon_id,
+        details={"selected_scan_types": updates.get("selected_scan_types")},
+        outcome="SUCCESS",
+        request=request,
     )
-
-    return campaign
+    return repo.get_recon_campaign(recon_id)
 
 
 @router.get("")
 @router.get("/", include_in_schema=False)
-def list_recon_campaigns(repo: FootprintIQRepository = Depends(get_repository)):
-    return repo.list_recon_campaigns()
+def list_recon_campaigns(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    camps = repo.list_recon_campaigns()
+    accessible = filter_accessible_investigation_ids(repo, current_user)
+    if accessible is None:
+        return camps
+    return [c for c in camps if c.get("recon_id") in accessible or c.get("investigation_id") in accessible]
 
 
 @router.get("/profiles")
-def list_profiles(repo: FootprintIQRepository = Depends(get_repository)):
-    return repo.list_saved_scan_profiles()
+def list_profiles(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    profs = repo.list_saved_scan_profiles()
+    if is_admin_user(current_user):
+        return profs
+    uname = current_user.get("username")
+    return [p for p in profs if p.get("is_builtin", True) or p.get("created_by") == uname]
 
 
 @router.post("/profiles", status_code=status.HTTP_201_CREATED)
 def create_profile(
     req: SaveProfileRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
     prof = {
@@ -133,23 +439,46 @@ def create_profile(
         "category": req.category,
         "config_json": req.config_json,
         "is_builtin": False,
-        "created_by": current_user.get("username", "asip_ali"),
+        "created_by": current_user.get("username", "investigator"),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     repo._mem_profiles[req.name] = prof
+    record_security_audit(
+        repo,
+        user=current_user,
+        action="SCAN_PROFILE_CREATED",
+        target_resource=req.name,
+        details={"category": req.category},
+        outcome="SUCCESS",
+        request=request,
+    )
     return prof
 
 
 @router.get("/{recon_id}")
-def get_recon_campaign(recon_id: str, repo: FootprintIQRepository = Depends(get_repository)):
-    campaign = repo.get_recon_campaign(recon_id)
-    if not campaign:
+def get_recon_campaign(
+    recon_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    campaign = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        request=request,
+        action_label="RECON_VIEW",
+    )
+    if not campaign.get("recon_id"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
 
     targets = repo.list_authorized_targets(investigation_id=recon_id)
     scans = repo.list_scans(investigation_id=recon_id)
     findings = repo.list_findings(investigation_id=recon_id)
     evidence = repo.list_evidence(investigation_id=recon_id)
+    bundle = load_campaign_results_bundle(recon_id, repo)
+    reports = repo.list_report_records(investigation_id=recon_id)
+    live_ctx = ExecutionManager(repo=repo).build_live_snapshot(recon_id, campaign, scans, bundle)
 
     return {
         **campaign,
@@ -157,7 +486,16 @@ def get_recon_campaign(recon_id: str, repo: FootprintIQRepository = Depends(get_
         "scans": scans,
         "findings_count": len(findings),
         "evidence_count": len(evidence),
-        "findings": findings
+        "findings": findings,
+        "explained_findings": enrich_findings_with_explanations(findings),
+        "passive_results": bundle["passive_results"],
+        "active_hosts": bundle["active_hosts"],
+        "discovered_ports": bundle["discovered_ports"],
+        "scanner_statuses": bundle["scanner_statuses"],
+        "failed_stages": bundle["failed_stages"],
+        "events": bundle["events"],
+        "reports": reports,
+        "live_ctx": live_ctx,
     }
 
 
@@ -165,32 +503,96 @@ def get_recon_campaign(recon_id: str, repo: FootprintIQRepository = Depends(get_
 def start_recon_scan(
     recon_id: str,
     req: StartReconRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
-    campaign = repo.get_recon_campaign(recon_id)
-    if not campaign:
+    campaign = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        require_execution=True,
+        request=request,
+        action_label="RECON_SCAN_START",
+    )
+    if not campaign.get("recon_id"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
+
+    # Verify configuration completeness and explicit availability of requested vulnerability engines
+    try:
+        cfg = json.loads(campaign.get("scan_config_json") or "{}")
+    except Exception:
+        cfg = {}
+    selected_cats = [str(c).lower() for c in (cfg.get("selected_categories") or [])]
+    eff_scan_type = req.scan_type or campaign.get("selected_scan_types") or "combined"
+    if eff_scan_type.lower() == "draft" and not selected_cats:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select at least one assessment category (Passive, Active, or Vulnerability) before starting execution."
+        )
+
+    # Enforce active/vulnerability target authorization before starting
+    eff_mode = "passive" if (selected_cats == ["passive"] or eff_scan_type.lower() == "passive") else "combined"
+    try:
+        raw_t = cfg.get("targets") or [t.strip() for t in str(campaign.get("target_value") or "").split(",") if t.strip()]
+        TargetAuthorizer().authorize_campaign_targets(
+            targets=raw_t,
+            scope_mode=eff_mode,
+            excluded_targets=campaign.get("excluded_targets"),
+            explicit_authorization=(campaign.get("authorization_status", "").lower() == "authorized"),
+            operator=current_user.get("username", "asip_ali")
+        )
+    except TargetAuthorizationError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    vuln_cfg = cfg.get("vulnerability") or {}
+    v_engine = str(vuln_cfg.get("engine") or "").lower()
+    v_engines = [str(e).lower() for e in (vuln_cfg.get("engines") or [])]
+    need_greenbone = v_engine in ("greenbone", "combined_nessus_greenbone") or "greenbone" in v_engines or req.scan_type == "greenbone"
+    need_nessus = v_engine in ("nessus", "combined_nessus_greenbone") or "nessus" in v_engines or req.scan_type == "nessus"
+
+    if need_greenbone:
+        from src.collectors.greenbone_collector import GreenboneCollector
+        gb_ready = GreenboneCollector.normalize_readiness(GreenboneCollector().check_readiness())
+        if not gb_ready.get("ready"):
+            reason = "; ".join(gb_ready.get("errors", [])) or "Greenbone / OpenVAS is unavailable."
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot launch Greenbone assessment: {reason}")
+    if need_nessus:
+        from src.collectors.nessus_collector import NessusCollector
+        n_conn = NessusCollector().test_connection()
+        if not n_conn.get("connected"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Tenable Nessus is unavailable: {n_conn.get('error') or n_conn.get('status')}")
+        if n_conn.get("scan_api_enabled") is False:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=n_conn.get("limitations") or "Nessus Essentials disables programmatic API scan launch (scan_api=false).")
 
     manager = ExecutionManager(repo=repo)
     try:
         job = manager.start_recon_scan(
             recon_id=recon_id,
-            scan_type=req.scan_type or campaign.get("selected_scan_types") or "combined",
+            scan_type=eff_scan_type,
             profile=req.profile or "lab-basic",
             custom_scripts=req.custom_scripts,
             operator=current_user.get("username", "asip_ali")
         )
 
-        repo.log_audit(
-            user_id=current_user.get("user_id", 1),
+        record_security_audit(
+            repo,
+            user=current_user,
             action="RECON_SCAN_STARTED",
             target_resource=campaign["target_value"],
-            details_json=json.dumps({"recon_id": recon_id, "scan_id": job["scan_id"]})
+            details={"recon_id": recon_id, "scan_id": job["scan_id"], "scan_type": eff_scan_type},
+            outcome="SUCCESS",
+            request=request,
         )
         return job
     except TargetAuthorizationError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ConcurrencyConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -198,26 +600,39 @@ def start_recon_scan(
 @router.post("/{recon_id}/cancel")
 def cancel_recon_scan(
     recon_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
+    enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        require_execution=True,
+        request=request,
+        action_label="RECON_SCAN_CANCEL",
+    )
     manager = ExecutionManager(repo=repo)
-    success = manager.cancel_recon_scan(recon_id)
-    repo.log_audit(
-        user_id=current_user.get("user_id", 1),
+    manager.cancel_recon_scan(recon_id)
+    record_security_audit(
+        repo,
+        user=current_user,
         action="RECON_SCAN_CANCELLED",
-        target_resource=recon_id
+        target_resource=recon_id,
+        outcome="SUCCESS",
+        request=request,
     )
     return {"status": "SUCCESS", "message": f"Scan for {recon_id} cancellation signaled."}
 
 
 @router.get("/{recon_id}/events")
-def get_recon_events(recon_id: str, repo: FootprintIQRepository = Depends(get_repository)):
-    campaign = repo.get_recon_campaign(recon_id)
-    if not campaign:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
-
-    # Find matching scan
+def get_recon_events(
+    recon_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    enforce_investigation_access(repo, current_user, recon_id, request=request, action_label="RECON_EVENTS")
     scans = repo.list_scans(investigation_id=recon_id)
     if not scans:
         return []
@@ -227,10 +642,15 @@ def get_recon_events(recon_id: str, repo: FootprintIQRepository = Depends(get_re
 
 
 @router.get("/{recon_id}/stream")
-async def stream_recon_events(recon_id: str, repo: FootprintIQRepository = Depends(get_repository)):
-    """Server-Sent Events (SSE) live execution stream for terminal output."""
-    campaign = repo.get_recon_campaign(recon_id)
-    if not campaign:
+async def stream_recon_events(
+    recon_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    """Server-Sent Events (SSE) live execution stream for web-native monitoring."""
+    campaign = enforce_investigation_access(repo, current_user, recon_id, request=request, action_label="RECON_STREAM")
+    if not campaign.get("recon_id"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
 
     manager = ExecutionManager(repo=repo)
@@ -253,7 +673,8 @@ async def stream_recon_events(recon_id: str, repo: FootprintIQRepository = Depen
         if not ctx or ctx.is_completed:
             camp = repo.get_recon_campaign(recon_id)
             final_status = camp.get("status", "Completed") if camp else "Completed"
-            yield f"data: {json.dumps({'event_type': 'done', 'status': final_status, 'progress': 100})}\n\n"
+            final_prog = camp.get("progress", 0) if camp else 0
+            yield f"data: {json.dumps({'event_type': 'done', 'status': final_status, 'progress': final_prog})}\n\n"
             return
 
         # 3. Stream live events as they occur
@@ -272,8 +693,11 @@ async def stream_recon_events(recon_id: str, repo: FootprintIQRepository = Depen
                     # Send keep-alive heartbeat
                     yield f": heartbeat\n\n"
 
-            # Final completion event
-            yield f"data: {json.dumps({'event_type': 'done', 'status': 'Completed', 'progress': 100})}\n\n"
+            # Final completion event with accurate campaign status
+            camp_end = repo.get_recon_campaign(recon_id)
+            final_st = camp_end.get("status", "Completed") if camp_end else "Completed"
+            final_prog = camp_end.get("progress", 0) if camp_end else 0
+            yield f"data: {json.dumps({'event_type': 'done', 'status': final_st, 'progress': final_prog})}\n\n"
         finally:
             if queue in ctx.subscribers:
                 ctx.subscribers.remove(queue)
@@ -282,7 +706,13 @@ async def stream_recon_events(recon_id: str, repo: FootprintIQRepository = Depen
 
 
 @router.get("/{recon_id}/findings")
-def get_recon_findings(recon_id: str, repo: FootprintIQRepository = Depends(get_repository)):
+def get_recon_findings(
+    recon_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    enforce_investigation_access(repo, current_user, recon_id, request=request, action_label="RECON_FINDINGS")
     return repo.list_findings(investigation_id=recon_id)
 
 
@@ -290,39 +720,68 @@ def get_recon_findings(recon_id: str, repo: FootprintIQRepository = Depends(get_
 def update_remediation(
     recon_id: str,
     req: RemediationUpdateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
-    success = repo.update_finding_remediation_status(
-        finding_id=req.finding_id,
-        new_status=req.status,
-        changed_by=current_user.get("username", "asip_ali"),
-        notes=req.notes or ""
+    enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        require_execution=True,
+        request=request,
+        action_label="REMEDIATION_UPDATE",
     )
-    if not success:
+    finding = repo.get_finding(req.finding_id)
+    if not finding:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Finding '{req.finding_id}' not found.")
-
-    repo.log_audit(
-        user_id=current_user.get("user_id", 1),
-        action="REMEDIATION_STATUS_UPDATED",
-        target_resource=req.finding_id,
-        details_json=json.dumps({"status": req.status, "notes": req.notes})
-    )
-    return {"status": "SUCCESS", "finding_id": req.finding_id, "new_status": req.status}
+    if finding.get("investigation_id") and finding.get("investigation_id") != recon_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Finding does not belong to this campaign.")
+    try:
+        res = repo.update_finding_remediation_status(
+            finding_id=req.finding_id,
+            new_status=req.status,
+            changed_by=current_user.get("username", "investigator"),
+            notes=req.notes or "",
+            expected_version=req.expected_version
+        )
+        record_security_audit(
+            repo,
+            user=current_user,
+            action="FINDING_REMEDIATION_UPDATED",
+            target_resource=req.finding_id,
+            details={"recon_id": recon_id, "new_status": req.status},
+            outcome="SUCCESS",
+            request=request,
+        )
+        return {
+            "status": "SUCCESS",
+            "finding_id": req.finding_id,
+            "new_status": req.status,
+            "version_id": res.get("version_id")
+        }
+    except ConcurrencyConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DatabaseIntegrityError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("/{recon_id}/compare/{other_recon_id}")
 def compare_recon_campaigns(
     recon_id: str,
     other_recon_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
     """Compares two reconnaissance campaigns to identify delta findings and port exposure."""
     from src.services.exposure_scoring import ExposureScoringEngine
 
-    c1 = repo.get_recon_campaign(recon_id)
-    c2 = repo.get_recon_campaign(other_recon_id)
-    if not c1 or not c2:
+    c1 = enforce_investigation_access(repo, current_user, recon_id, request=request, action_label="RECON_COMPARE")
+    c2 = enforce_investigation_access(repo, current_user, other_recon_id, request=request, action_label="RECON_COMPARE")
+    if not c1.get("recon_id") or not c2.get("recon_id"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or both Recon Campaigns not found.")
 
     f1 = repo.list_findings(investigation_id=recon_id)

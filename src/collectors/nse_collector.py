@@ -38,7 +38,8 @@ class NSECollector:
         scripts: Optional[List[str]] = None,
         ports: Optional[str] = None,
         investigation_id: str = "DEFAULT",
-        scan_id: Optional[str] = None
+        scan_id: Optional[str] = None,
+        allow_vuln_checks: bool = True
     ) -> Dict[str, Any]:
         """
         Executes policy-controlled NSE scan against an authorized target.
@@ -51,6 +52,11 @@ class NSECollector:
         # 2. Enforce script policy
         requested_scripts = scripts or ["http-title", "http-headers", "ftp-anon", "ftp-vsftpd-backdoor"]
         approved_scripts, rejected_scripts = NSEPolicyService.validate_scripts(requested_scripts)
+        if not allow_vuln_checks:
+            approved_scripts = [
+                s for s in approved_scripts
+                if APPROVED_NSE_SCRIPTS.get(s, {}).get("category") != "vuln"
+            ]
         if not approved_scripts:
             raise ValueError(f"No valid authorized scripts to execute. Rejected: {rejected_scripts}")
 
@@ -65,7 +71,9 @@ class NSECollector:
 
         cmd = [
             resolve_nmap_binary(),
+            "-sT",
             "-sV",
+            "-Pn",
             "--script", script_arg,
             "-oX", xml_path,
             "-T4"
@@ -98,6 +106,7 @@ class NSECollector:
         findings: List[Dict[str, Any]] = []
         script_results: List[Dict[str, Any]] = []
 
+        errors: List[str] = []
         if os.path.exists(xml_path) and os.path.getsize(xml_path) > 0:
             findings, script_results = self._parse_nse_xml(xml_path, target, investigation_id, scan_id)
 
@@ -111,11 +120,16 @@ class NSECollector:
                 evidence_type="nse_xml",
                 content_type="application/xml"
             )
+            status = "COMPLETED" if result.returncode == 0 else "PARTIAL"
         else:
             evidence_meta = {}
+            status = "FAILED" if result.returncode != 0 else "COMPLETED"
+            if result.returncode != 0:
+                err_msg = (result.stderr or "").strip() or f"Nmap NSE exited with code {result.returncode} and produced no XML output."
+                errors.append(err_msg)
 
         return {
-            "status": "COMPLETED" if result.returncode == 0 else "PARTIAL",
+            "status": status,
             "target": target,
             "executed_scripts": approved_scripts,
             "rejected_scripts": rejected_scripts,
@@ -124,7 +138,8 @@ class NSECollector:
             "findings": findings,
             "script_results": script_results,
             "evidence": evidence_meta,
-            "raw_xml_path": xml_path
+            "raw_xml_path": xml_path,
+            "errors": errors,
         }
 
     def _parse_nse_xml(

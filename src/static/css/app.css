@@ -202,6 +202,57 @@ body {
 }
 
 /* ==========================================================================
+   Subtle 3D Enterprise Depth Cards & Interactive Controls
+   ========================================================================== */
+.fiq-3d-perspective {
+  perspective: 1100px;
+}
+
+.fiq-3d-card {
+  position: relative;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 6px 18px -6px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transform-style: preserve-3d;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+  will-change: transform;
+}
+
+.fiq-3d-card:hover {
+  transform: perspective(1100px) rotateX(var(--fiq-rx, 0deg)) rotateY(var(--fiq-ry, 0deg)) translateY(-4px);
+  box-shadow:
+    0 8px 24px -6px rgba(37, 99, 235, 0.14),
+    0 18px 34px -14px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+  border-color: #93c5fd;
+}
+
+.fiq-3d-card:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}
+
+.fiq-3d-selected {
+  border-color: #2563eb !important;
+  background: linear-gradient(180deg, #ffffff 0%, #eff6ff 100%);
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.2),
+    0 14px 28px -10px rgba(37, 99, 235, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 1);
+}
+
+.fiq-3d-icon {
+  box-shadow:
+    0 4px 10px -2px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transform: translateZ(10px);
+}
+
+/* ==========================================================================
    Accessibility: Strict Reduced Motion Override
    ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
@@ -214,6 +265,12 @@ body {
     scroll-behavior: auto !important;
     transform: none !important;
     opacity: 1 !important;
+  }
+
+  .fiq-3d-card,
+  .fiq-3d-card:hover,
+  .fiq-3d-icon {
+    transform: none !important;
   }
 
   .reveal-on-scroll {

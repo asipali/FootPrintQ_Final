@@ -14,8 +14,8 @@ class TestReconCampaigns(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(app)
-        # Authenticate admin user
-        login_resp = cls.client.post("/api/v1/auth/login", json={"username": "admin", "password": "AdminPass2026!"})
+        # Authenticate approved investigator
+        login_resp = cls.client.post("/api/v1/auth/login", json={"username": "investigator1", "password": "Investigator1Pass2026!"})
         cls.token = login_resp.json().get("access_token")
         cls.headers = {"Authorization": f"Bearer {cls.token}"}
         cls.repo = FootprintIQRepository()

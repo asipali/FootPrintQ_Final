@@ -39,6 +39,18 @@
     "allow_public_ips": false,
     "allow_unlisted_targets": false,
     "require_explicit_authorization": true
-  }
+  },
+  "approved_lab_ranges": [
+    {
+      "range": "192.168.56.0/24",
+      "description": "VirtualBox Host-Only Lab Network",
+      "permitted_profiles": [
+        "lab-basic",
+        "lab-safe-minimal",
+        "lab-common-services"
+      ],
+      "added_by": "admin"
+    }
+  ],
+  "authorized_domains": []
 }
-

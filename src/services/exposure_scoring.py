@@ -11,6 +11,8 @@ Implements a transparent, deterministic risk-scoring methodology combining:
 import math
 from typing import List, Dict, Any
 
+from src.services.finding_translator import parse_confidence_score
+
 SEVERITY_WEIGHTS = {
     "Critical": 10.0,
     "High": 7.5,
@@ -27,8 +29,8 @@ class ExposureScoringEngine:
         Calculates individual finding risk score (0 - 100).
         """
         cvss = finding.get("cvss_score")
-        severity = finding.get("severity", "Informational")
-        confidence = float(finding.get("confidence", 0.8))
+        severity = str(finding.get("severity", "Informational") or "Informational")
+        confidence = parse_confidence_score(finding.get("confidence"), default=0.8)
         is_verified = finding.get("verification_status") == "verified"
 
         # Determine base score
@@ -36,7 +38,7 @@ class ExposureScoringEngine:
             base_score = float(cvss) * 10.0
             score_source = f"CVSS {cvss}"
         else:
-            base_score = SEVERITY_WEIGHTS.get(severity, 2.5) * 10.0
+            base_score = SEVERITY_WEIGHTS.get(severity.title(), SEVERITY_WEIGHTS.get(severity, 2.5)) * 10.0
             score_source = f"Severity mapping ({severity})"
 
         # Multipliers

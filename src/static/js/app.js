@@ -13,6 +13,58 @@
   'use strict';
 
   // =========================================================================
+  // 0. CSRF TOKEN INJECTION FOR SAME-ORIGIN STATE-CHANGING REQUESTS
+  // =========================================================================
+  function getCsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)fiq_csrf=([^;]+)/);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1]);
+    }
+    const meta = document.querySelector('meta[name="fiq-csrf"]');
+    return meta ? (meta.getAttribute('content') || '') : '';
+  }
+
+  window.FIQ_GetCsrfToken = getCsrfToken;
+
+  if (typeof window.fetch === 'function') {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      const opts = init ? Object.assign({}, init) : {};
+      const method = String(opts.method || (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET')).toUpperCase();
+      if (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') {
+        let sameOrigin = true;
+        try {
+          const urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+          if (urlStr) {
+            const parsed = new URL(urlStr, window.location.origin);
+            sameOrigin = parsed.origin === window.location.origin;
+          }
+        } catch (_) {
+          sameOrigin = true;
+        }
+        if (sameOrigin) {
+          const csrf = getCsrfToken();
+          if (csrf) {
+            const headers = new Headers(opts.headers || (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
+            if (!headers.has('X-CSRF-Token')) {
+              headers.set('X-CSRF-Token', csrf);
+            }
+            opts.headers = headers;
+          }
+        }
+      }
+      return nativeFetch(input, opts);
+    };
+  }
+
+  window.FIQ_Logout = async function () {
+    try {
+      await window.fetch('/api/v1/auth/logout', { method: 'POST' });
+    } catch (_) {}
+    window.location.href = '/login';
+  };
+
+  // =========================================================================
   // 1. SCROLL-TRIGGERED ANIMATION OBSERVER
   // =========================================================================
   function initScrollAnimations() {
@@ -200,11 +252,74 @@
         return card;
       }
 
-      grid.appendChild(createHealthCard('SQL Server 2022', data.database?.status || 'Active', 'Host: 127.0.0.1:1433 (mssql+pymssql)'));
-      grid.appendChild(createHealthCard('SeaweedFS Object Storage', data.object_storage?.status || 'ONLINE', 'Master: 9333 | Volume: 8080 (SHA-256 integrity)'));
-      grid.appendChild(createHealthCard('Nmap & NSE Collector', data.network_scanner?.status || 'ONLINE', 'Path: ' + (data.network_scanner?.binary_path || 'system default')));
-      grid.appendChild(createHealthCard('Greenbone / OpenVAS', data.vulnerability_scanners?.greenbone_openvas?.status || 'ONLINE', 'Socket: /run/gvmd/gvmd.sock'));
-      grid.appendChild(createHealthCard('Tenable Nessus Engine', data.vulnerability_scanners?.nessus?.status || 'SIMULATED', 'Mode: Verified Simulation / Adapter'));
+      grid.appendChild(createHealthCard('Campaign Data Store', data.database?.status || 'Active', 'Persistent campaign and findings storage'));
+      grid.appendChild(createHealthCard('Evidence Archive', data.object_storage?.status || 'ONLINE', 'Integrity-verified artifact preservation'));
+      grid.appendChild(createHealthCard('Network Assessment Engine', data.network_scanner?.status || 'ONLINE', 'Port, service & safety script scanner'));
+      grid.appendChild(createHealthCard('Greenbone / OpenVAS', data.vulnerability_scanners?.greenbone_openvas?.status || 'UNAVAILABLE', 'Deep vulnerability engine status'));
+
+      // Enhanced Tenable Nessus Card with Live Connection Testing
+      const nessusData = data.vulnerability_scanners?.nessus || {};
+      const nessusCard = document.createElement('div');
+      nessusCard.className = 'p-3 rounded-lg border border-slate-200 bg-slate-50/70 space-y-2';
+
+      const nHead = document.createElement('div');
+      nHead.className = 'flex items-center justify-between';
+      const nTitle = document.createElement('span');
+      nTitle.className = 'font-semibold text-slate-900';
+      nTitle.textContent = 'Tenable Nessus Bridge';
+      const nBadge = document.createElement('span');
+      const isNessusOnline = nessusData.status === 'ONLINE' || nessusData.mode === 'LIVE';
+      nBadge.id = 'diagNessusBadge';
+      nBadge.className = 'px-2 py-0.5 rounded text-[11px] font-bold ' +
+        (isNessusOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700');
+      nBadge.textContent = nessusData.status || 'OFFLINE';
+      nHead.appendChild(nTitle);
+      nHead.appendChild(nBadge);
+      nessusCard.appendChild(nHead);
+
+      const nDetails = document.createElement('p');
+      nDetails.id = 'diagNessusDetails';
+      nDetails.className = 'text-slate-500 text-[11px] leading-relaxed';
+      nDetails.textContent = `Status: ${nessusData.status || 'UNKNOWN'} • Mode: ${nessusData.mode || 'API Adapter'}`;
+      nessusCard.appendChild(nDetails);
+
+      const nBtnRow = document.createElement('div');
+      nBtnRow.className = 'pt-1 flex items-center justify-between';
+
+      const nTestBtn = document.createElement('button');
+      nTestBtn.className = 'px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded text-slate-700 text-[10px] font-semibold transition';
+      nTestBtn.textContent = 'Test Connection';
+      nTestBtn.onclick = async function () {
+        nTestBtn.disabled = true;
+        nTestBtn.textContent = 'Testing...';
+        try {
+          const testRes = await fetch('/api/v1/scanners/nessus/test', { method: 'POST' });
+          const testData = await testRes.json();
+          nBadge.textContent = testData.status || (testData.connected ? 'Operational' : 'Unavailable');
+          if (testData.connected && testData.scan_api_enabled === false) {
+            nBadge.textContent = 'Connected (Read-Only)';
+            nBadge.className = 'px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800';
+            nDetails.textContent = `Verified: ${testData.version || 'Nessus'} (${testData.nessus_type || testData.edition || 'Essentials'}) • ${testData.limitations || 'Scan launch restricted by license (scan_api=false)'}`;
+          } else if (testData.connected) {
+            nBadge.className = 'px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800';
+            nDetails.textContent = `Verified: ${testData.version || 'Nessus 10.x'} (${testData.nessus_type || testData.edition || 'Professional'}) • API Ready`;
+          } else {
+            nBadge.className = 'px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800';
+            nDetails.textContent = `Status: ${testData.status} • ${testData.error || 'Check environment variables'}`;
+          }
+        } catch (e) {
+          nBadge.textContent = 'Error';
+          nBadge.className = 'px-2 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800';
+          nDetails.textContent = 'API Test Request Failed: ' + e.message;
+        } finally {
+          nTestBtn.disabled = false;
+          nTestBtn.textContent = 'Retest';
+        }
+      };
+      nBtnRow.appendChild(nTestBtn);
+      nessusCard.appendChild(nBtnRow);
+
+      grid.appendChild(nessusCard);
 
       content.appendChild(grid);
     } catch (err) {
@@ -218,11 +333,47 @@
   };
 
   // =========================================================================
+  // 3D INTERACTIVE CARDS & KEYBOARD ACCESSIBILITY
+  // =========================================================================
+  function init3DCards() {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document.querySelectorAll('.fiq-3d-card').forEach(function (card) {
+      if (!reduceMotion) {
+        card.addEventListener('pointermove', function (ev) {
+          const rect = card.getBoundingClientRect();
+          if (!rect.width || !rect.height) return;
+          const x = (ev.clientX - rect.left) / rect.width - 0.5;
+          const y = (ev.clientY - rect.top) / rect.height - 0.5;
+          card.style.setProperty('--fiq-rx', (-y * 4).toFixed(2) + 'deg');
+          card.style.setProperty('--fiq-ry', (x * 4).toFixed(2) + 'deg');
+        });
+        card.addEventListener('pointerleave', function () {
+          card.style.removeProperty('--fiq-rx');
+          card.style.removeProperty('--fiq-ry');
+        });
+      }
+      card.addEventListener('keydown', function (ev) {
+        if ((ev.key === 'Enter' || ev.key === ' ') && card.hasAttribute('data-fiq-key-click')) {
+          if (ev.target === card) {
+            ev.preventDefault();
+            card.click();
+          }
+        }
+      });
+    });
+  }
+
+  // =========================================================================
   // INITIALIZATION ON DOM READY
   // =========================================================================
   document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-progress-width]').forEach(function (el) {
+      const pct = Math.max(0, Math.min(100, Number(el.dataset.progressWidth || 0)));
+      el.style.width = `${pct}%`;
+    });
     initScrollAnimations();
     initSidebar();
+    init3DCards();
     if (typeof lucide !== 'undefined') {
       lucide.createIcons();
     }

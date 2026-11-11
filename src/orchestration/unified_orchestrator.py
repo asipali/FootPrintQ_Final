@@ -21,6 +21,7 @@ from src.collectors.nse_collector import NSECollector
 from src.collectors.nessus_collector import NessusCollector
 from src.collectors.rdap_collector import RDAPCollector
 from src.collectors.greenbone_collector import GreenboneCollector
+from src.collectors.passive_intel_collector import PassiveIntelCollector
 from src.orchestration.passive_pipeline import PassiveReconPipeline
 from src.orchestration.active_pipeline import ActiveReconPipeline
 from src.orchestration.vulnerability_pipeline import VulnerabilityPipeline
@@ -45,6 +46,7 @@ class UnifiedScanOrchestrator:
         self.nse_collector = NSECollector(authorizer=self.authorizer, storage_client=self.storage)
         self.nessus_collector = NessusCollector()
         self.rdap_collector = RDAPCollector()
+        self.passive_collector = PassiveIntelCollector()
 
     def execute_scan(
         self,
@@ -181,21 +183,77 @@ class UnifiedScanOrchestrator:
             "findings": []
         }
 
-    def _run_nmap_services(self, target: str, profile: str, investigation_id: str, scan_id: str) -> Dict[str, Any]:
-        """Runs Nmap service detection and OS fingerprinting."""
+    def _run_passive_intel(
+        self,
+        target: str,
+        selected_checks: List[str],
+        allow_target_contact: bool,
+        investigation_id: str,
+        scan_id: str,
+        progress_cb=None
+    ) -> Dict[str, Any]:
+        """Executes modular passive OSINT & infrastructure intelligence checks."""
+        intel_res = self.passive_collector.run_selected_checks(
+            target=target,
+            selected_checks=selected_checks,
+            allow_target_contact=allow_target_contact,
+            progress_cb=progress_cb
+        )
+        try:
+            payload = json.dumps(intel_res, indent=2).encode("utf-8")
+            ev_meta = self.storage.upload_content(
+                content=payload,
+                file_name=f"passive_intel_{target.replace('/', '_')}_{scan_id}.json",
+                investigation_id=investigation_id,
+                evidence_type="passive_intel_json",
+                content_type="application/json"
+            )
+            self.repo.add_evidence_record(
+                investigation_id=investigation_id,
+                evidence_type="passive_intel_json",
+                file_name=ev_meta["file_name"],
+                file_size=ev_meta["file_size"],
+                sha256_hash=ev_meta["sha256_hash"],
+                seaweed_fid=ev_meta.get("seaweed_fid"),
+                seaweed_url=ev_meta.get("seaweed_url"),
+                local_path=ev_meta.get("local_path"),
+                scan_id=scan_id
+            )
+        except Exception as e:
+            logger.warning(f"Failed to archive passive intel evidence: {e}")
+
+        return intel_res
+
+    def _run_nmap_services(
+        self,
+        target: str,
+        profile: str,
+        investigation_id: str,
+        scan_id: str,
+        custom_active_options: Optional[Dict[str, Any]] = None,
+        use_db_scope: bool = False
+    ) -> Dict[str, Any]:
+        """Runs Nmap host/port/service detection and extracts discovered hosts & open ports cleanly."""
         prof = profile if profile in ("lab-basic", "lab-safe-minimal", "lab-common-services") else "lab-basic"
         pipeline = ActiveReconPipeline()
-        result = pipeline.run(target=target, profile=prof)
+        result = pipeline.run(
+            target=target,
+            profile=prof,
+            scan_id=scan_id,
+            custom_active_options=custom_active_options,
+            repo=self.repo if use_db_scope else None,
+            investigation_id=investigation_id if use_db_scope else None
+        )
 
         # Save active Nmap XML evidence
-        xml_path = getattr(pipeline.collector, "last_xml_path", None)
+        xml_path = (result.raw_files or {}).get("xml") if hasattr(result, "raw_files") else None
         ev_meta = {}
         if xml_path and os.path.exists(xml_path):
             with open(xml_path, "rb") as f:
                 content = f.read()
             ev_meta = self.storage.upload_content(
                 content=content,
-                file_name=os.path.basename(xml_path),
+                file_name=f"nmap_{target.replace('/', '_')}_{scan_id}.xml",
                 investigation_id=investigation_id,
                 evidence_type="nmap_xml",
                 content_type="application/xml"
@@ -208,13 +266,49 @@ class UnifiedScanOrchestrator:
                 sha256_hash=ev_meta["sha256_hash"],
                 seaweed_fid=ev_meta.get("seaweed_fid"),
                 seaweed_url=ev_meta.get("seaweed_url"),
-                local_path=ev_meta["local_path"]
+                local_path=ev_meta.get("local_path"),
+                scan_id=scan_id
             )
 
+        extracted_hosts: List[Dict[str, Any]] = []
+        extracted_ports: List[Dict[str, Any]] = []
+        for h in getattr(result, "hosts", []) or []:
+            host_ip = getattr(h, "ip", None) or getattr(h, "address", None) or target
+            os_guesses = []
+            for om in getattr(h, "os_matches", []) or []:
+                os_guesses.append(getattr(om, "name", str(om)))
+            extracted_hosts.append({
+                "ip": host_ip,
+                "hostname": getattr(h, "hostname", None),
+                "status": getattr(h, "status", "unknown"),
+                "os_matches": os_guesses[:3],
+                "open_ports_count": sum(1 for p in getattr(h, "ports", []) if getattr(p, "state", "") == "open")
+            })
+            for p in getattr(h, "ports", []) or []:
+                if getattr(p, "state", "") == "open":
+                    svc = getattr(p, "service", None)
+                    svc_name = getattr(svc, "name", "unknown") if svc else "unknown"
+                    product = getattr(svc, "product", "") if svc else ""
+                    version = getattr(svc, "version", "") if svc else ""
+                    svc_ver = " ".join([x for x in (product, version) if x]).strip()
+                    extracted_ports.append({
+                        "target_ip": host_ip,
+                        "port": getattr(p, "portid", 0),
+                        "protocol": getattr(p, "protocol", "tcp"),
+                        "state": getattr(p, "state", "open"),
+                        "service": svc_name,
+                        "service_version": svc_ver,
+                        "extrainfo": getattr(svc, "extrainfo", "") if svc else ""
+                    })
+
         return {
-            "status": "COMPLETED",
+            "status": getattr(result, "overall_status", "COMPLETED"),
             "scan_type": "nmap_services",
             "target": target,
+            "hosts": extracted_hosts,
+            "ports": extracted_ports,
+            "summary": getattr(result, "summary", {}),
+            "errors": getattr(result, "errors", []),
             "active_recon": result.model_dump() if hasattr(result, "model_dump") else {},
             "evidence": ev_meta,
             "findings": []
@@ -226,7 +320,8 @@ class UnifiedScanOrchestrator:
             target=target,
             scripts=scripts,
             investigation_id=investigation_id,
-            scan_id=scan_id
+            scan_id=scan_id,
+            allow_vuln_checks=True
         )
         findings = nse_res.get("findings", [])
         for f in findings:
@@ -276,16 +371,42 @@ class UnifiedScanOrchestrator:
             "findings": findings
         }
 
-    def _run_nessus(self, target: str, investigation_id: str, scan_id: str) -> Dict[str, Any]:
-        """Runs Nessus vulnerability assessment or verified simulation."""
+    def _run_nessus(self, target: str, investigation_id: str, scan_id: str, template_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Runs Nessus vulnerability assessment or verified simulation, archiving evidence in SeaweedFS."""
         nessus_res = self.nessus_collector.scan_target(
             target=target,
             investigation_id=investigation_id,
-            scan_id=scan_id
+            scan_id=scan_id,
+            template_uuid=template_uuid
         )
         findings = nessus_res.get("findings", [])
         for f in findings:
             self.repo.add_vulnerability_finding(investigation_id, f, scan_id=scan_id)
+
+        # Preserve Nessus report export in SeaweedFS if present
+        report_bytes = nessus_res.get("report_bytes")
+        if report_bytes:
+            try:
+                ev_meta = self.storage.upload_content(
+                    content=report_bytes,
+                    file_name=f"nessus_report_{target}_{scan_id}.nessus",
+                    investigation_id=investigation_id,
+                    evidence_type="nessus_export",
+                    content_type="application/xml"
+                )
+                self.repo.add_evidence_record(
+                    investigation_id=investigation_id,
+                    evidence_type="nessus_export",
+                    file_name=ev_meta["file_name"],
+                    file_size=ev_meta["file_size"],
+                    sha256_hash=ev_meta["sha256_hash"],
+                    seaweed_fid=ev_meta.get("seaweed_fid"),
+                    seaweed_url=ev_meta.get("seaweed_url"),
+                    local_path=ev_meta.get("local_path"),
+                    scan_id=scan_id
+                )
+            except Exception as e:
+                logger.warning(f"SeaweedFS upload notice for Nessus export: {e}")
 
         return nessus_res
 
@@ -327,21 +448,23 @@ class UnifiedScanOrchestrator:
         greenbone_status = "UNAVAILABLE"
         try:
             gb_collector = GreenboneCollector()
-            is_ready, details = gb_collector.check_readiness()
-            if is_ready:
+            readiness = GreenboneCollector.normalize_readiness(gb_collector.check_readiness())
+            if readiness.get("ready"):
                 gb_res = self._run_greenbone(target, investigation_id, scan_id)
                 all_findings.extend(gb_res.get("findings", []))
                 scanners_executed.append("greenbone")
                 greenbone_status = "ONLINE"
-            elif details.get("connected"):
-                greenbone_status = "FEED_SYNCING"
-                scanners_skipped.append({"scanner": "greenbone", "reason": "Feed synchronization in progress"})
+            elif readiness.get("checks", {}).get("socket_reachable"):
+                greenbone_status = "UNAVAILABLE"
+                reason = "; ".join(readiness.get("errors", [])) or "Feed synchronization or authentication not ready"
+                scanners_skipped.append({"scanner": "greenbone", "reason": reason})
             else:
-                greenbone_status = "OFFLINE"
-                scanners_skipped.append({"scanner": "greenbone", "reason": "GMP socket unavailable or daemon stopped"})
+                greenbone_status = "UNAVAILABLE"
+                reason = "; ".join(readiness.get("errors", [])) or "Greenbone daemon/socket unavailable"
+                scanners_skipped.append({"scanner": "greenbone", "reason": reason})
         except Exception as e:
             logger.warning(f"Combined scan Greenbone integration check skipped: {e}")
-            greenbone_status = "DEGRADED"
+            greenbone_status = "UNAVAILABLE"
             scanners_skipped.append({"scanner": "greenbone", "reason": str(e)})
 
         # 5. Exposure scoring and correlation

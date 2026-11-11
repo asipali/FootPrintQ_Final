@@ -115,3 +115,4 @@ def downgrade() -> None:
     op.drop_table('saved_scan_profiles')
     op.drop_table('scan_execution_events')
     op.drop_table('recon_campaigns')
+

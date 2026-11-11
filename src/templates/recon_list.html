@@ -20,12 +20,16 @@
         </p>
       </div>
 
+      {% if not is_admin %}
       <div class="flex items-center space-x-3">
         <a href="/recon/new" class="inline-flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow-sm transition">
           <i data-lucide="plus" class="w-4 h-4"></i>
           <span>Create New Recon</span>
         </a>
       </div>
+      {% else %}
+      <span class="px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-bold">Read-Only All-Campaign Oversight</span>
+      {% endif %}
     </div>
   </div>
 
@@ -57,7 +61,7 @@
         <span class="text-xs font-semibold {% if running_count > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">Running Now</span>
       </div>
       <div class="mt-2 text-[11px] text-slate-500">
-        Live SSE real-time telemetry active
+        Real-time campaign tracking active
       </div>
     </div>
 
@@ -72,7 +76,7 @@
         <span class="text-xs font-medium text-slate-400">Finished</span>
       </div>
       <div class="mt-2 text-[11px] text-slate-500">
-        All evidence vaulted in SeaweedFS
+        Integrity-verified assessment deliverables
       </div>
     </div>
 
@@ -153,7 +157,7 @@
                   <span class="font-bold">{{ c.progress or 0 }}%</span>
                 </div>
                 <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                  <div class="bg-blue-600 h-1.5 rounded-full transition-all duration-500" style="width: {{ c.progress or 0 }}%"></div>
+                  <div class="bg-blue-600 h-1.5 rounded-full transition-all duration-500" data-progress-width="{{ c.progress or 0 }}"></div>
                 </div>
               </div>
             </td>
@@ -187,12 +191,33 @@
             </td>
             <td class="text-right">
               <div class="inline-flex items-center space-x-1.5">
-                <a href="/recon/{{ c.recon_id }}/live" class="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Live Terminal">
-                  <i data-lucide="terminal" class="w-4 h-4"></i>
+                {% if not is_admin and c.status in ['Draft', 'Authorized', 'Pending'] %}
+                <a href="/recon/{{ c.recon_id }}/workspace" class="px-2 py-1 text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-md transition" title="Configure Scans">
+                  Configure
                 </a>
-                <a href="/recon/{{ c.recon_id }}/results" class="p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="Results Dashboard">
-                  <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
+                {% endif %}
+                <a href="/recon/{{ c.recon_id }}/live" class="px-2 py-1 text-[11px] font-semibold text-slate-700 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 rounded-md transition" title="Live Monitor">
+                  Live
                 </a>
+                <a href="/recon/{{ c.recon_id }}/results" class="px-2 py-1 text-[11px] font-semibold text-blue-700 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-md transition" title="Results Dashboard">
+                  Results
+                </a>
+                {% set existing_rep = reports_by_recon.get(c.recon_id) %}
+                {% if existing_rep %}
+                <a href="{{ existing_rep.analysis_url }}" class="px-2 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-md transition" title="Analyse Report">
+                  Analyse
+                </a>
+                <a href="{{ existing_rep.download_url }}" class="px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 border border-slate-200 rounded-md transition" title="Download Report">
+                  PDF &darr;
+                </a>
+                {% elif not is_admin %}
+                <a href="/recon/{{ c.recon_id }}/pdf?format=executive" class="px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 border border-slate-200 rounded-md transition" title="Generate Executive PDF">
+                  Exec PDF
+                </a>
+                <a href="/recon/{{ c.recon_id }}/pdf?format=technical" class="px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 border border-slate-200 rounded-md transition" title="Generate Technical PDF">
+                  Tech PDF
+                </a>
+                {% endif %}
               </div>
             </td>
           </tr>
@@ -203,16 +228,18 @@
                 <div class="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
                   <i data-lucide="radar" class="w-6 h-6"></i>
                 </div>
-                <h3 class="text-sm font-bold text-slate-800">No Recon Campaigns Created Yet</h3>
+                <h3 class="text-sm font-bold text-slate-800">No Recon campaigns yet. Create your first Recon to begin.</h3>
                 <p class="text-xs text-slate-500">
-                  Begin by initiating a structured reconnaissance campaign against authorized lab target <span class="mono font-semibold text-slate-700">192.168.56.111</span>.
+                  Start by creating a campaign with your target domain, IP address, or authorized scope, then manually choose the assessments to execute.
                 </p>
+                {% if not is_admin %}
                 <div class="pt-2">
                   <a href="/recon/new" class="inline-flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition">
                     <i data-lucide="plus" class="w-4 h-4"></i>
-                    <span>Create First Campaign</span>
+                    <span>Create Recon</span>
                   </a>
                 </div>
+                {% endif %}
               </div>
             </td>
           </tr>
@@ -235,3 +262,4 @@ function filterCampaigns() {
 }
 </script>
 {% endblock %}
+

@@ -11,6 +11,7 @@
     </div>
   </div>
 
+  {% if not is_admin %}
   <!-- Launch Scan Card -->
   <div class="fiq-card p-6 reveal-on-scroll">
     <div class="flex items-center justify-between mb-4">
@@ -46,7 +47,7 @@
               {{ t.target }} — {{ t.name }}
             </option>
             {% else %}
-            <option value="192.168.56.111" data-investigation="ALL">192.168.56.111 (Metasploitable2)</option>
+            <option value="" disabled selected>No authorized targets registered yet</option>
             {% endfor %}
           </select>
         </div>
@@ -88,6 +89,7 @@
       </div>
     </form>
   </div>
+  {% endif %}
 
   <!-- Scan Execution History Table -->
   <div class="fiq-card p-6 reveal-on-scroll">

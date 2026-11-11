@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Settings &amp; Scope Policy — FootprintIQ{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-5xl mx-auto">
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div>
+      <h1 class="text-xl font-bold text-slate-900">Workspace Settings &amp; Authorization Scope</h1>
+      <p class="text-xs text-slate-500 mt-0.5">Manage your operator session and review authorized target rules before launching campaigns</p>
+    </div>
+    <div class="flex items-center space-x-2">
+      {% if is_admin %}
+      <a href="/admin/system" class="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition">
+        Manage Scope &amp; System
+      </a>
+      {% endif %}
+      <a href="/login" class="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold rounded-lg transition">
+        Switch Account
+      </a>
+    </div>
+  </div>
+
+  <!-- Operator Session Card -->
+  <div class="fiq-card p-6">
+    <h2 class="text-sm font-bold text-slate-900 mb-3">Operator Session</h2>
+    {% if current_user %}
+    <div class="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200">
+      <div class="space-y-1">
+        <div class="text-sm font-bold text-slate-900">{{ current_user.username }}</div>
+        <div class="flex items-center space-x-2 text-xs text-slate-600">
+          <span class="px-2 py-0.5 rounded font-bold uppercase text-[10px] {% if is_admin %}bg-indigo-100 text-indigo-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+            {{ current_user.role }}
+          </span>
+          <span>&bull; Authenticated Session</span>
+        </div>
+      </div>
+      <button type="button" onclick="signOutSettings()"
+              class="px-3.5 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold transition">
+        Sign Out
+      </button>
+    </div>
+    {% else %}
+    <div class="p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-4">
+      <div>
+        <div class="text-xs font-bold text-amber-900">Guest Investigator Session</div>
+        <div class="text-[11px] text-amber-700 mt-0.5">Sign in with your operator or administrator account for full administrative privileges.</div>
+      </div>
+      <a href="/login" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition">
+        Sign In
+      </a>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Approved Assessment Scope Summary -->
+  <div class="fiq-card p-6 space-y-5">
+    <div>
+      <h2 class="text-sm font-bold text-slate-900">Scope &amp; Authorization Policy</h2>
+      <p class="text-xs text-slate-500 mt-0.5">
+        Passive intelligence supports explicit public domains when scoped safely, while active scanning and vulnerability assessment enforce strict server-side target authorization.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+        <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Enforcement Mode</div>
+        <div class="text-sm font-bold text-slate-900 mt-1">{{ scope_summary.policy_mode or 'Fail-Closed Scope Enforcement' }}</div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+        <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Registered Authorized Assets</div>
+        <div class="text-sm font-bold text-emerald-700 mt-1">
+          {{ scope_summary.authorized_targets_count or 0 }} Host(s) &bull; {{ scope_summary.approved_ranges_count or 0 }} Network Range(s)
+        </div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+        <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Public Internet Scanning</div>
+        <div class="text-sm font-bold text-slate-900 mt-1">
+          {% if scope_summary.public_ips_restricted %}Restricted (Passive OSINT Only Unless Approved){% else %}Permitted With Authorization{% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if is_admin %}
+    <div class="pt-1 flex justify-end">
+      <a href="/admin/system" class="text-xs font-semibold text-blue-600 hover:text-blue-700">Manage Scope Allowlist in System Administration &rarr;</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+async function signOutSettings() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/login';
+}
+</script>
+{% endblock %}

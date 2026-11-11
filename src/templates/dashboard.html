@@ -10,24 +10,26 @@
       <div>
         <div class="flex items-center space-x-2">
           <span class="px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase rounded bg-blue-100 text-blue-800">
-            Active Scope Authorized
+            Scope Authorized
           </span>
-          <span class="text-xs text-slate-400">&bull; Local VirtualBox Lab</span>
+          <span class="text-xs text-slate-400">&bull; Security Assessment Platform</span>
         </div>
         <h1 class="text-xl font-bold text-slate-900 mt-1">Investigation Intelligence Dashboard</h1>
         <p class="text-xs text-slate-500 mt-0.5">
-          Primary Authorized Lab Target: <span class="mono font-semibold text-slate-800">192.168.56.111</span> (Metasploitable2) &bull; Fail-Closed Security Policy
+          Manual Reconnaissance, Service Discovery &amp; Multi-Engine Vulnerability Assessment &bull; Fail-Closed Scope Policy
         </p>
       </div>
 
       <div class="flex items-center space-x-3">
+        {% if not is_admin %}
         <a href="/recon/new" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow-sm transition inline-flex items-center space-x-1.5">
           <i data-lucide="plus" class="w-3.5 h-3.5"></i>
           <span>New Recon Campaign</span>
         </a>
+        {% endif %}
         <a href="/recon" class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg transition inline-flex items-center space-x-1.5">
           <i data-lucide="radar" class="w-3.5 h-3.5"></i>
-          <span>Campaigns ({{ total_campaigns or 0 }})</span>
+          <span>{{ 'All Investigations' if is_admin else 'Campaigns' }} ({{ total_campaigns or 0 }})</span>
         </a>
         <a href="/reports" class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg transition hidden md:inline-flex items-center space-x-1.5">
           <i data-lucide="download" class="w-3.5 h-3.5"></i>
@@ -103,65 +105,68 @@
         <span class="text-xs font-bold text-emerald-600">Active Pipeline</span>
       </div>
       <div class="mt-2 text-[11px] text-slate-500">
-        {{ total_evidence }} Evidence Records in SeaweedFS
+        {{ total_evidence }} Archived Evidence Artifacts
       </div>
     </div>
   </div>
 
-  <!-- Core Infrastructure & Scanner Engines Status -->
+  {% if is_admin %}
+  <div class="fiq-card p-6 border-l-4 border-l-indigo-600 bg-white reveal-on-scroll">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <h2 class="text-sm font-bold text-slate-900">Administrator Oversight &amp; Governance</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Full platform visibility across investigations, findings, reports, scanner integrations, and security audit trails.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href="/admin/users" class="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-semibold">Manage Users</a>
+        <a href="/admin/scanners" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">Scanner Health</a>
+        <a href="/admin/audit-logs" class="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold">View Audit Logs</a>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <!-- Assessment Workflows Quick Launch -->
   <div class="fiq-card p-6 reveal-on-scroll">
     <div class="flex items-center justify-between mb-4">
       <div>
-        <h2 class="text-sm font-bold text-slate-900">Multi-Scanner Engines &amp; Core Infrastructure</h2>
-        <p class="text-xs text-slate-500">Real-time status of data store, object storage, and vulnerability scanners</p>
+        <h2 class="text-sm font-bold text-slate-900">Start a Security Assessment</h2>
+        <p class="text-xs text-slate-500">Select the reconnaissance or vulnerability assessment stage you need</p>
       </div>
-      <button onclick="openHealthModal()" class="text-xs text-blue-600 hover:text-blue-800 font-semibold">
-        Run Full Diagnostic &rarr;
-      </button>
+      <a href="/recon/new" class="text-xs text-blue-600 hover:text-blue-800 font-semibold">
+        Configure Assessment &rarr;
+      </a>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <!-- SQL Server 2022 -->
-      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
+    {% set p_cnt = (options_catalog.passive.groups.domain_intelligence.options|length + options_catalog.passive.groups.osint_intelligence.options|length + options_catalog.passive.groups.infrastructure_intelligence.options|length) if options_catalog else 17 %}
+    {% set a_cnt = (options_catalog.active.groups.host_discovery.options|length + options_catalog.active.groups.service_enumeration.options|length) if options_catalog else 14 %}
+    {% set v_cnt = (options_catalog.vulnerability.nse.discovery_scripts|length + options_catalog.vulnerability.nse.vulnerability_scripts|length) if options_catalog else 12 %}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 fiq-3d-perspective">
+      <a href="/recon/new" class="fiq-3d-card p-5 block">
         <div class="flex items-center justify-between">
-          <span class="text-xs font-bold text-slate-800">SQL Server 2022</span>
-          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">Active</span>
+          <span class="text-xs font-bold text-slate-900 uppercase tracking-wide">Passive Reconnaissance</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700">{{ p_cnt }} Checks</span>
         </div>
-        <p class="text-[11px] text-slate-500 mt-1.5">Dialect: mssql+pymssql</p>
-        <p class="text-[10px] text-slate-400">Strict Relational Store</p>
-      </div>
+        <p class="text-xs text-slate-600 mt-2">WHOIS, RDAP, DNS records, Certificate Transparency, ASN, and public OSINT intelligence.</p>
+      </a>
 
-      <!-- SeaweedFS -->
-      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
+      <a href="/recon/new" class="fiq-3d-card p-5 block">
         <div class="flex items-center justify-between">
-          <span class="text-xs font-bold text-slate-800">SeaweedFS Storage</span>
-          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">Online (9333)</span>
+          <span class="text-xs font-bold text-slate-900 uppercase tracking-wide">Active Reconnaissance</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-indigo-100 text-indigo-700">{{ a_cnt }} Options</span>
         </div>
-        <p class="text-[11px] text-slate-500 mt-1.5">Distributed Volumes: 8080</p>
-        <p class="text-[10px] text-slate-400">SHA-256 Verified Records</p>
-      </div>
+        <p class="text-xs text-slate-600 mt-2">Host liveness verification, custom or standard TCP/UDP port sweeps, version detection, and service checks.</p>
+      </a>
 
-      <!-- Nmap & NSE -->
-      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
+      <a href="/recon/new" class="fiq-3d-card p-5 block">
         <div class="flex items-center justify-between">
-          <span class="text-xs font-bold text-slate-800">Nmap &amp; NSE Engine</span>
-          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800">Online</span>
+          <span class="text-xs font-bold text-slate-900 uppercase tracking-wide">Vulnerability Assessment</span>
+          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-rose-100 text-rose-700">{{ v_cnt }}+ NSE + Engines</span>
         </div>
-        <p class="text-[11px] text-slate-500 mt-1.5">Version: 7.95 (SYN/NSE)</p>
-        <p class="text-[10px] text-slate-400">Policy Service Enforced</p>
-      </div>
-
-      <!-- Greenbone / OpenVAS -->
-      <div class="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-bold text-slate-800">Greenbone / OpenVAS</span>
-          <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-800">GMP Ready</span>
-        </div>
-        <p class="text-[11px] text-slate-500 mt-1.5">Socket: /run/gvmd/gvmd.sock</p>
-        <p class="text-[10px] text-slate-400">SCAP/VT Feed Integrated</p>
-      </div>
+        <p class="text-xs text-slate-600 mt-2">Policy-controlled NSE security audits, Tenable Nessus, Greenbone/OpenVAS, and combined multi-engine runs.</p>
+      </a>
     </div>
   </div>
+  {% endif %}
 
   <!-- Recent Reconnaissance Campaigns -->
   <div class="fiq-card p-6 reveal-on-scroll">
@@ -207,8 +212,13 @@
               </span>
             </td>
             <td class="text-right space-x-1">
-              <a href="/recon/{{ c.recon_id }}/live" class="p-1 text-slate-500 hover:text-blue-600 rounded inline-block" title="Live Terminal">
-                <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+              {% if c.status in ['Draft', 'Authorized', 'Pending'] %}
+              <a href="/recon/{{ c.recon_id }}/workspace" class="p-1 text-slate-500 hover:text-blue-600 rounded inline-block" title="Configure Workspace">
+                <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i>
+              </a>
+              {% endif %}
+              <a href="/recon/{{ c.recon_id }}/live" class="p-1 text-slate-500 hover:text-blue-600 rounded inline-block" title="Live Monitor">
+                <i data-lucide="activity" class="w-3.5 h-3.5"></i>
               </a>
               <a href="/recon/{{ c.recon_id }}/results" class="p-1 text-slate-500 hover:text-indigo-600 rounded inline-block" title="Results">
                 <i data-lucide="bar-chart-3" class="w-3.5 h-3.5"></i>
@@ -217,8 +227,9 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="6" class="py-6 text-center text-xs text-slate-400">
-              No reconnaissance campaigns yet. <a href="/recon/new" class="text-blue-600 font-semibold hover:underline">Create a campaign</a> to begin.
+            <td colspan="6" class="py-6 text-center text-xs text-slate-500">
+              No Recon campaigns yet. {% if not is_admin %}Create your first Recon to begin.
+              <a href="/recon/new" class="ml-1 text-blue-600 font-semibold hover:underline">New Recon &rarr;</a>{% endif %}
             </td>
           </tr>
           {% endfor %}

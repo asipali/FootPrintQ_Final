@@ -166,7 +166,10 @@ class ActiveReconPipeline:
         profile: str = "lab-basic",
         operator: str = "asip_ali",
         scan_id: Optional[str] = None,
-        skip_connectivity_check: bool = False
+        skip_connectivity_check: bool = False,
+        custom_active_options: Optional[Dict[str, Any]] = None,
+        repo: Optional[Any] = None,
+        investigation_id: Optional[str] = None
     ) -> ActiveReconResult:
         """
         Executes complete active reconnaissance workflow:
@@ -185,7 +188,9 @@ class ActiveReconPipeline:
             auth_record = self.authorizer.authorize_target(
                 target=target,
                 profile=profile,
-                operator=operator
+                operator=operator,
+                investigation_id=investigation_id,
+                repo=repo
             )
         except (TargetAuthorizationError, TargetSyntaxError) as ae:
             end_time = datetime.now(timezone.utc).isoformat()
@@ -211,16 +216,18 @@ class ActiveReconPipeline:
 
         clean_target = auth_record.target
 
-        # 2. Target Reachability Check (Pre-Scan Lab Verification)
-        if not skip_connectivity_check:
+        # 2. Target Reachability Check (skip if CIDR/range or explicitly bypassed)
+        is_range_target = "/" in clean_target or (
+            "-" in clean_target and any(ch.isdigit() for ch in clean_target.split("-")[-1])
+        )
+        if not skip_connectivity_check and not is_range_target:
             is_up, reach_msg = self.authorizer.verify_target_connectivity(clean_target)
             if not is_up:
                 end_time = datetime.now(timezone.utc).isoformat()
                 blocked_msg = (
                     f"Target '{clean_target}' is UNREACHABLE or OFFLINE. "
                     "Active reconnaissance halted before scanning to prevent inaccurate or stalled results.\n"
-                    "Action Required: Please verify that the target VM (e.g. Metasploitable2) is powered on "
-                    "and attached to the VirtualBox Host-Only Network (192.168.56.0/24)."
+                    "Action Required: Please verify that the target host is online and reachable."
                 )
                 return ActiveReconResult(
                     scan_id=sid,
@@ -237,13 +244,21 @@ class ActiveReconPipeline:
         scan_evidence_dir = os.path.join(self.raw_dir, sid, "nmap")
         os.makedirs(scan_evidence_dir, exist_ok=True)
 
-        # 4. Execute Nmap
-        collector_res = self.collector.execute_scan(
-            auth_record=auth_record,
-            profile_name=profile,
-            output_dir=scan_evidence_dir,
-            timeout=self.timeout
-        )
+        # 4. Execute Nmap (custom manual options or named safe profile)
+        if custom_active_options:
+            collector_res = self.collector.execute_custom_scan(
+                auth_record=auth_record,
+                options=custom_active_options,
+                output_dir=scan_evidence_dir,
+                timeout=self.timeout
+            )
+        else:
+            collector_res = self.collector.execute_scan(
+                auth_record=auth_record,
+                profile_name=profile,
+                output_dir=scan_evidence_dir,
+                timeout=self.timeout
+            )
 
         if collector_res.error_message:
             errors.append(collector_res.error_message)

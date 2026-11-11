@@ -198,11 +198,11 @@ class AssetProfileBuilder:
         notes: List[str] = []
         if is_lab:
             notes.append(
-                f"Intentionally isolated laboratory virtual machine ({ip_str}) on VirtualBox Host-Only network. "
-                "Passive WHOIS and public DNS resolution are intentionally unavailable and unobserved."
+                f"Private isolated laboratory asset ({ip_str}) within authorized assessment scope. "
+                "Public WHOIS and public DNS resolution are not applicable to RFC1918 private addresses."
             )
         elif is_loop:
-            notes.append(f"Diagnostic loopback interface ({ip_str}) on local Kali host.")
+            notes.append(f"Diagnostic loopback interface ({ip_str}) on local host.")
         else:
             notes.append(f"Public IP address asset ({ip_str}).")
 

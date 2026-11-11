@@ -74,6 +74,24 @@ class GreenboneCollector:
         self.auth_config = auth_config or GreenboneAuthConfig()
         self.client = client or GreenboneClient(auth_config=self.auth_config)
 
+    @staticmethod
+    def normalize_readiness(result: Any) -> Dict[str, Any]:
+        """Normalizes either `(bool, dict)` tuple or `dict` readiness result into a consistent dict."""
+        if isinstance(result, dict):
+            out = dict(result)
+            out["ready"] = bool(out.get("ready", False))
+            out.setdefault("errors", [])
+            out.setdefault("checks", {})
+            return out
+        if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
+            is_ready, details = result
+            out = dict(details)
+            out["ready"] = bool(is_ready)
+            out.setdefault("errors", [])
+            out.setdefault("checks", {"socket_reachable": bool(out.get("socket_exists"))})
+            return out
+        return {"ready": False, "errors": ["Greenbone readiness unavailable."], "checks": {}}
+
     def check_readiness(self) -> Tuple[bool, Dict[str, Any]]:
         """
         Verifies local socket/TLS connectivity, authentication, scanner presence, and feed readiness.

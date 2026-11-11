@@ -50,29 +50,25 @@ def get_system_health():
     storage = SeaweedFSClient()
     seaweed_status = storage.check_health()
 
-    # 3. Nmap / NSE Health
+    # 3. Nmap / NSE Health (sanitized: omit internal binary paths on public health endpoint)
     nmap_path = _detect_nmap_binary()
     nmap_status = {
         "status": "ONLINE" if nmap_path else "MISSING",
-        "binary_path": nmap_path or None,
         "capabilities": ["SYN", "TCP", "UDP", "NSE", "Service Detection", "OS Detection"]
     }
 
-    # 4. Greenbone / OpenVAS Health (Probe socket & GMP readiness)
+    # 4. Greenbone / OpenVAS Health (Probe socket & GMP readiness without exposing socket paths)
     gvmd_sock = "/run/gvmd/gvmd.sock"
-    ospd_sock = "/run/ospd/ospd-openvas.sock"
     socket_exists = os.path.exists(gvmd_sock)
-    
+
     gb_status_label = "UNAVAILABLE"
-    gb_details = {}
     if socket_exists:
         try:
             gb_col = GreenboneCollector()
-            is_ready, details = gb_col.check_readiness()
-            gb_details = details
-            if is_ready:
+            readiness = GreenboneCollector.normalize_readiness(gb_col.check_readiness())
+            if readiness.get("ready"):
                 gb_status_label = "ONLINE"
-            elif details.get("connected"):
+            elif (readiness.get("checks") or {}).get("connected"):
                 gb_status_label = "FEED_SYNCING"
             else:
                 gb_status_label = "INITIALIZING"
@@ -80,18 +76,13 @@ def get_system_health():
             gb_status_label = "INITIALIZING"
 
     greenbone_status = {
-        "status": gb_status_label,
-        "gvmd_socket": gvmd_sock,
-        "gvmd_active": socket_exists,
-        "ospd_socket": ospd_sock,
-        "ospd_active": os.path.exists(ospd_sock),
-        "details": gb_details,
-        "gsad_ui": "https://127.0.0.1:9392"
+        "status": gb_status_label
     }
 
-    # 5. Nessus Scanner Health
+    # 5. Nessus Scanner Health (sanitized: omit internal URL)
     nessus_collector = NessusCollector()
     nessus_status = nessus_collector.check_status()
+    nessus_status.pop("server_url", None)
 
     # Overall system state
     all_ready = (
@@ -103,8 +94,8 @@ def get_system_health():
         "platform": "FootprintIQ",
         "version": "2.0-Enterprise",
         "system_status": "OPERATIONAL" if all_ready else "DEGRADED",
-        "database": db_status,
-        "object_storage": seaweed_status,
+        "database": {"status": db_status.get("status", "Active") if isinstance(db_status, dict) else str(db_status)},
+        "object_storage": {"status": seaweed_status.get("status", "UNKNOWN")},
         "network_scanner": nmap_status,
         "vulnerability_scanners": {
             "greenbone_openvas": greenbone_status,
