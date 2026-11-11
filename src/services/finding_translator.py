@@ -40,7 +40,7 @@ def classify_confidence(finding: Dict[str, Any]) -> str:
         return "Confirmed Vulnerability"
     if ver in ("false_positive",):
         return "Marked False Positive"
-    if src in ("nessus", "openvas", "greenbone", "nmap_nse") and conf >= 0.65:
+    if src in ("nessus", "nuclei", "nmap_nse", "nse", "openvas", "greenbone") and conf >= 0.65:
         return "Potential Vulnerability"
     return "Unverified / Informational"
 

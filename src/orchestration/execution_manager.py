@@ -226,7 +226,7 @@ class ExecutionManager:
 
         run_passive = ("passive" in selected_categories) or (not selected_categories and scan_type in ("passive", "combined"))
         run_active = ("active" in selected_categories) or (not selected_categories and scan_type in ("network_discovery", "nmap_services", "combined"))
-        run_vuln = ("vulnerability" in selected_categories) or (not selected_categories and scan_type in ("nmap_nse", "nessus", "greenbone", "combined"))
+        run_vuln = ("vulnerability" in selected_categories) or (not selected_categories and scan_type in ("nmap_nse", "nuclei", "nessus", "combined"))
 
         ctx.scan_categories = [c.title() for c in selected_categories] if selected_categories else [
             lbl for flag, lbl in ((run_passive, "Passive"), (run_active, "Active"), (run_vuln, "Vulnerability")) if flag
@@ -454,19 +454,22 @@ class ExecutionManager:
                     if not selected_categories:
                         # Legacy scan_type dispatch mapping
                         want_nse = scan_type in ("nmap_nse", "combined")
+                        want_nuclei = scan_type in ("nuclei", "combined")
                         want_nessus = scan_type in ("nessus", "combined")
-                        want_greenbone = scan_type in ("greenbone", "combined")
-                        explicit_greenbone = (scan_type == "greenbone")
+                        explicit_nuclei = (scan_type == "nuclei")
+                        explicit_nessus = (scan_type == "nessus")
                     elif vuln_engines:
                         want_nse = ("nse" in vuln_engines) or bool(vuln_cfg.get("nse_scripts"))
+                        want_nuclei = "nuclei" in vuln_engines
                         want_nessus = "nessus" in vuln_engines
-                        want_greenbone = "greenbone" in vuln_engines
-                        explicit_greenbone = "greenbone" in vuln_engines
+                        explicit_nuclei = "nuclei" in vuln_engines
+                        explicit_nessus = "nessus" in vuln_engines
                     else:
                         want_nse = vuln_engine in ("nse", "all") or bool(vuln_cfg.get("nse_scripts"))
-                        want_nessus = vuln_engine in ("nessus", "combined_nessus_greenbone", "combined", "all")
-                        want_greenbone = vuln_engine in ("greenbone", "combined_nessus_greenbone", "all")
-                        explicit_greenbone = vuln_engine in ("greenbone", "combined_nessus_greenbone")
+                        want_nuclei = vuln_engine in ("nuclei", "combined", "all")
+                        want_nessus = vuln_engine in ("nessus", "all")
+                        explicit_nuclei = vuln_engine in ("nuclei", "combined")
+                        explicit_nessus = (vuln_engine == "nessus")
 
                     # A. Allowlisted Nmap NSE Assessment
                     if want_nse:
@@ -499,85 +502,91 @@ class ExecutionManager:
                         self._handle_cancellation(ctx, worker_repo)
                         return
 
-                    # B. Tenable Nessus Live Assessment (No simulation fallback in manual workflows)
+                    # B. Tenable Nessus Live Assessment (No simulation fallback; honest read-only handling)
                     if want_nessus:
                         self._emit_event(ctx, "stage_start", f"Starting Tenable Nessus vulnerability scan on {tgt}...", stage="VULN_NESSUS", progress=84, component="Tenable Nessus")
                         try:
-                            def nessus_cb(status_data):
-                                st_text = status_data.get("status", "running")
-                                prog = status_data.get("progress")
-                                prog_str = f" ({prog}%)" if prog is not None else ""
-                                self._emit_event(
-                                    ctx,
-                                    "log",
-                                    f"Nessus scan status: {st_text}{prog_str}",
-                                    stage="VULN_NESSUS",
-                                    progress=84 if prog is None else min(91, 84 + int(prog * 0.07)),
-                                    component="Tenable Nessus",
-                                    details=status_data
-                                )
-
-                            nessus_res = orchestrator.nessus_collector.scan_target(
-                                target=tgt,
-                                investigation_id=ctx.recon_id,
-                                scan_id=ctx.scan_id,
-                                template_uuid=vuln_cfg.get("nessus_template_uuid"),
-                                status_callback=nessus_cb,
-                                allow_simulation=False,
-                                cancel_event=ctx.cancel_requested
-                            )
-                            n_status = nessus_res.get("status", "UNKNOWN")
-                            if ctx.cancel_requested.is_set() or n_status == "CANCELED":
-                                self._handle_cancellation(ctx, worker_repo)
-                                return
-
-                            if n_status == "FAILED":
-                                failed_stages += 1
-                                failed_stage_names.append(f"Tenable Nessus ({tgt})")
-                                err_msg = nessus_res.get("error") or "Nessus assessment failed or unavailable."
-                                scanner_statuses.append({"scanner": "Tenable Nessus", "target": tgt, "status": "FAILED", "detail": err_msg})
-                                self._emit_event(ctx, "error", f"Tenable Nessus failed on {tgt}: {err_msg}", stage="VULN_NESSUS", component="Tenable Nessus")
+                            n_conn = orchestrator.nessus_collector.test_connection()
+                            if n_conn.get("connected") and not n_conn.get("scan_api_enabled", True) and not explicit_nessus:
+                                ro_msg = n_conn.get("limitations") or "Nessus Essentials operates in Read-Only mode (scan_api=false); import existing Nessus scan results separately."
+                                scanner_statuses.append({"scanner": "Tenable Nessus", "target": tgt, "status": "READ_ONLY", "detail": ro_msg})
+                                self._emit_event(ctx, "warning", f"Tenable Nessus skipped launch on {tgt}: {ro_msg}", stage="VULN_NESSUS", progress=91, component="Tenable Nessus")
                             else:
-                                succeeded_stages += 1
-                                scanners_executed.append("nessus")
-                                n_findings = nessus_res.get("findings", [])
-                                all_findings.extend(n_findings)
-                                for f in n_findings:
-                                    worker_repo.add_vulnerability_finding(ctx.recon_id, f, scan_id=ctx.scan_id)
+                                def nessus_cb(status_data):
+                                    st_text = status_data.get("status", "running")
+                                    prog = status_data.get("progress")
+                                    prog_str = f" ({prog}%)" if prog is not None else ""
                                     self._emit_event(
                                         ctx,
-                                        "finding_discovered",
-                                        f"Nessus: {f.get('title')} ({f.get('severity')}) on port {f.get('port')}",
+                                        "log",
+                                        f"Nessus scan status: {st_text}{prog_str}",
                                         stage="VULN_NESSUS",
+                                        progress=84 if prog is None else min(91, 84 + int(prog * 0.07)),
                                         component="Tenable Nessus",
-                                        details=f
+                                        details=status_data
                                     )
-                                rep_bytes = nessus_res.get("report_bytes")
-                                if rep_bytes:
-                                    try:
-                                        ev = orchestrator.storage.upload_content(
-                                            content=rep_bytes,
-                                            file_name=f"nessus_{tgt}_{ctx.scan_id}.nessus",
-                                            investigation_id=ctx.recon_id,
-                                            evidence_type="nessus_export",
-                                            content_type="application/xml"
-                                        )
-                                        worker_repo.add_evidence_record(
-                                            investigation_id=ctx.recon_id,
-                                            evidence_type="nessus_export",
-                                            file_name=ev["file_name"],
-                                            file_size=ev["file_size"],
-                                            sha256_hash=ev["sha256_hash"],
-                                            seaweed_fid=ev.get("seaweed_fid"),
-                                            seaweed_url=ev.get("seaweed_url"),
-                                            local_path=ev.get("local_path"),
-                                            scan_id=ctx.scan_id
-                                        )
-                                    except Exception as e_ev:
-                                        logger.warning(f"Evidence archival notice for Nessus export: {e_ev}")
 
-                                scanner_statuses.append({"scanner": "Tenable Nessus", "target": tgt, "status": "COMPLETED", "detail": f"Findings: {len(n_findings)}"})
-                                self._emit_event(ctx, "stage_complete", f"Tenable Nessus completed for {tgt} ({len(n_findings)} findings).", stage="VULN_NESSUS", progress=91, component="Tenable Nessus")
+                                nessus_res = orchestrator.nessus_collector.scan_target(
+                                    target=tgt,
+                                    investigation_id=ctx.recon_id,
+                                    scan_id=ctx.scan_id,
+                                    template_uuid=vuln_cfg.get("nessus_template_uuid"),
+                                    status_callback=nessus_cb,
+                                    allow_simulation=False,
+                                    cancel_event=ctx.cancel_requested
+                                )
+                                n_status = nessus_res.get("status", "UNKNOWN")
+                                if ctx.cancel_requested.is_set() or n_status == "CANCELED":
+                                    self._handle_cancellation(ctx, worker_repo)
+                                    return
+
+                                if n_status == "FAILED":
+                                    failed_stages += 1
+                                    failed_stage_names.append(f"Tenable Nessus ({tgt})")
+                                    err_msg = nessus_res.get("error") or "Nessus assessment failed or unavailable."
+                                    scanner_statuses.append({"scanner": "Tenable Nessus", "target": tgt, "status": "FAILED", "detail": err_msg})
+                                    self._emit_event(ctx, "error", f"Tenable Nessus failed on {tgt}: {err_msg}", stage="VULN_NESSUS", component="Tenable Nessus")
+                                else:
+                                    succeeded_stages += 1
+                                    scanners_executed.append("nessus")
+                                    n_findings = nessus_res.get("findings", [])
+                                    all_findings.extend(n_findings)
+                                    for f in n_findings:
+                                        worker_repo.add_vulnerability_finding(ctx.recon_id, f, scan_id=ctx.scan_id)
+                                        self._emit_event(
+                                            ctx,
+                                            "finding_discovered",
+                                            f"Nessus: {f.get('title')} ({f.get('severity')}) on port {f.get('port')}",
+                                            stage="VULN_NESSUS",
+                                            component="Tenable Nessus",
+                                            details=f
+                                        )
+                                    rep_bytes = nessus_res.get("report_bytes")
+                                    if rep_bytes:
+                                        try:
+                                            ev = orchestrator.storage.upload_content(
+                                                content=rep_bytes,
+                                                file_name=f"nessus_{tgt}_{ctx.scan_id}.nessus",
+                                                investigation_id=ctx.recon_id,
+                                                evidence_type="nessus_export",
+                                                content_type="application/xml"
+                                            )
+                                            worker_repo.add_evidence_record(
+                                                investigation_id=ctx.recon_id,
+                                                evidence_type="nessus_export",
+                                                file_name=ev["file_name"],
+                                                file_size=ev["file_size"],
+                                                sha256_hash=ev["sha256_hash"],
+                                                seaweed_fid=ev.get("seaweed_fid"),
+                                                seaweed_url=ev.get("seaweed_url"),
+                                                local_path=ev.get("local_path"),
+                                                scan_id=ctx.scan_id
+                                            )
+                                        except Exception as e_ev:
+                                            logger.warning(f"Evidence archival notice for Nessus export: {e_ev}")
+
+                                    scanner_statuses.append({"scanner": "Tenable Nessus", "target": tgt, "status": "COMPLETED", "detail": f"Findings: {len(n_findings)}"})
+                                    self._emit_event(ctx, "stage_complete", f"Tenable Nessus completed for {tgt} ({len(n_findings)} findings).", stage="VULN_NESSUS", progress=91, component="Tenable Nessus")
                         except Exception as n_err:
                             failed_stages += 1
                             failed_stage_names.append(f"Tenable Nessus ({tgt})")
@@ -588,44 +597,90 @@ class ExecutionManager:
                         self._handle_cancellation(ctx, worker_repo)
                         return
 
-                    # C. Greenbone / OpenVAS Assessment (Strict Readiness — Never Fake Operational)
-                    if want_greenbone:
-                        self._emit_event(ctx, "stage_start", "Verifying Greenbone / OpenVAS readiness...", stage="VULN_GREENBONE", progress=92, component="Greenbone")
+                    # C. ProjectDiscovery Nuclei Assessment (Policy-Governed Non-Destructive Execution)
+                    if want_nuclei:
+                        nuclei_profile = str(vuln_cfg.get("nuclei_profile") or "http-security")
+                        nuclei_tags = vuln_cfg.get("nuclei_tags")
+                        nuclei_severities = vuln_cfg.get("nuclei_severities")
+                        nuclei_rl = int(vuln_cfg.get("nuclei_rate_limit") or 30)
+                        self._emit_event(
+                            ctx,
+                            "stage_start",
+                            f"Running ProjectDiscovery Nuclei ({nuclei_profile}) against {tgt}...",
+                            stage="VULN_NUCLEI",
+                            progress=92,
+                            component="Nuclei",
+                        )
                         try:
-                            from src.collectors.greenbone_collector import GreenboneCollector
-                            gb_collector = GreenboneCollector()
-                            readiness = GreenboneCollector.normalize_readiness(gb_collector.check_readiness())
-                            if readiness.get("ready"):
-                                gb_res = orchestrator._run_greenbone(tgt, ctx.recon_id, ctx.scan_id)
-                                g_findings = gb_res.get("findings", [])
-                                all_findings.extend(g_findings)
-                                scanners_executed.append("greenbone")
+                            nuc_res = orchestrator._run_nuclei(
+                                target=tgt,
+                                investigation_id=ctx.recon_id,
+                                scan_id=ctx.scan_id,
+                                profile=nuclei_profile,
+                                severities=nuclei_severities,
+                                tags=nuclei_tags,
+                                discovered_ports=discovered_ports,
+                                cancel_event=ctx.cancel_requested,
+                                rate_limit=nuclei_rl,
+                            )
+                            nuc_findings = nuc_res.get("findings") or []
+                            for f in nuc_findings:
+                                all_findings.append(f)
+                                worker_repo.add_vulnerability_finding(ctx.recon_id, f, scan_id=ctx.scan_id)
+                                self._emit_event(ctx, "finding_discovered", f"Nuclei finding: {f.get('title')}", stage="VULN_NUCLEI", component="Nuclei", details=f)
+                            nuc_ev = nuc_res.get("evidence")
+                            if isinstance(nuc_ev, dict) and nuc_ev.get("file_name"):
+                                try:
+                                    worker_repo.add_evidence_record(
+                                        investigation_id=ctx.recon_id,
+                                        evidence_type="nuclei_jsonl",
+                                        file_name=nuc_ev["file_name"],
+                                        file_size=nuc_ev["file_size"],
+                                        sha256_hash=nuc_ev["sha256_hash"],
+                                        seaweed_fid=nuc_ev.get("seaweed_fid"),
+                                        seaweed_url=nuc_ev.get("seaweed_url"),
+                                        local_path=nuc_ev.get("local_path"),
+                                        scan_id=ctx.scan_id,
+                                    )
+                                except Exception as ev_err:
+                                    logger.warning(f"Nuclei evidence record notice: {ev_err}")
+                            nuc_status = nuc_res.get("status", "COMPLETED")
+                            if nuc_status == "CANCELLED":
+                                self._handle_cancellation(ctx, worker_repo)
+                                return
+                            scanners_executed.append("nuclei")
+                            if nuc_status in ("COMPLETED", "PARTIAL"):
                                 succeeded_stages += 1
-                                scanner_statuses.append({"scanner": "Greenbone / OpenVAS", "target": tgt, "status": "COMPLETED", "detail": f"Findings: {len(g_findings)}"})
-                                self._emit_event(ctx, "stage_complete", f"Greenbone scan completed for {tgt} ({len(g_findings)} findings).", stage="VULN_GREENBONE", progress=94, component="Greenbone")
-                            else:
-                                err_reason = "; ".join(readiness.get("errors", [])) or "Greenbone manager, scanner, or vulnerability feeds are not ready."
-                                scanner_statuses.append({"scanner": "Greenbone / OpenVAS", "target": tgt, "status": "UNAVAILABLE", "detail": err_reason})
-                                if explicit_greenbone:
-                                    failed_stages += 1
-                                    failed_stage_names.append(f"Greenbone ({tgt})")
-                                    self._emit_event(ctx, "error", f"Greenbone scan could not start: {err_reason}", stage="VULN_GREENBONE", progress=94, component="Greenbone")
-                                else:
-                                    self._emit_event(ctx, "warning", f"Greenbone unavailable: {err_reason}", stage="VULN_GREENBONE", progress=94, component="Greenbone")
-                        except Exception as g_err:
-                            scanner_statuses.append({"scanner": "Greenbone / OpenVAS", "target": tgt, "status": "FAILED", "detail": str(g_err)})
-                            if explicit_greenbone:
+                            elif explicit_nuclei:
                                 failed_stages += 1
-                                failed_stage_names.append(f"Greenbone ({tgt})")
-                            self._emit_event(ctx, "error", f"Greenbone error: {g_err}", stage="VULN_GREENBONE", component="Greenbone")
+                                failed_stage_names.append(f"Nuclei ({tgt})")
+                            detail_msg = f"Profile: {nuclei_profile} | Findings: {len(nuc_findings)}"
+                            if nuc_res.get("error"):
+                                detail_msg = nuc_res["error"]
+                            scanner_statuses.append({"scanner": "ProjectDiscovery Nuclei", "target": tgt, "status": nuc_status, "detail": detail_msg})
+                            self._emit_event(
+                                ctx,
+                                "stage_complete" if nuc_status in ("COMPLETED", "PARTIAL") else "warning",
+                                f"Nuclei assessment finished for {tgt} ({len(nuc_findings)} finding(s)).",
+                                stage="VULN_NUCLEI",
+                                progress=94,
+                                component="Nuclei",
+                            )
+                        except Exception as nuc_err:
+                            scanner_statuses.append({"scanner": "ProjectDiscovery Nuclei", "target": tgt, "status": "FAILED", "detail": str(nuc_err)})
+                            if explicit_nuclei:
+                                failed_stages += 1
+                                failed_stage_names.append(f"Nuclei ({tgt})")
+                            self._emit_event(ctx, "error", f"Nuclei error: {nuc_err}", stage="VULN_NUCLEI", component="Nuclei")
 
             if ctx.cancel_requested.is_set():
                 self._handle_cancellation(ctx, worker_repo)
                 return
 
-            # Stage: Exposure Scoring & Result Archival
-            self._emit_event(ctx, "stage_start", "Correlating collected findings and calculating risk exposure score...", stage="CORRELATION", progress=96, component="Exposure Engine")
+            # Stage 5: Exposure Scoring, Graph Synthesis & Result Archival
+            self._emit_event(ctx, "stage_start", "Correlating collected findings, building Entity Graph, and calculating risk exposure score...", stage="CORRELATION", progress=96, component="Exposure & Graph Engine")
             from src.services.exposure_scoring import ExposureScoringEngine
+            from src.services.graph_intelligence_service import GraphIntelligenceService
             exposure_report = ExposureScoringEngine.calculate_investigation_exposure(all_findings)
             worker_repo.update_exposure_score(ctx.recon_id, exposure_report["exposure_score"])
 
@@ -704,6 +759,14 @@ class ExecutionManager:
                 error_message="; ".join(failed_stage_names) if failed_stage_names else None,
                 result_summary_json=json.dumps(summary_bundle)
             )
+            # Synthesize & archive Investigation Entity Graph + Maltego compatibility bundle
+            try:
+                GraphIntelligenceService(repo=worker_repo, storage=orchestrator.storage).sync_campaign_graph(
+                    ctx.recon_id, scan_id=ctx.scan_id
+                )
+            except Exception as graph_err:
+                logger.warning(f"Graph synthesis notice for {ctx.recon_id}: {graph_err}")
+
             worker_repo.update_recon_campaign(
                 ctx.recon_id,
                 status=camp_status,

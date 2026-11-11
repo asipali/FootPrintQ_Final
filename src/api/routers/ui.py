@@ -387,11 +387,11 @@ def view_recon_live(
     except Exception:
         pass
 
-    greenbone_status = "Unavailable"
+    nuclei_status = "Unavailable"
     try:
-        from src.collectors.greenbone_collector import GreenboneCollector
-        gb_res = GreenboneCollector.normalize_readiness(GreenboneCollector().check_readiness())
-        greenbone_status = "Operational" if gb_res.get("ready") else "Unavailable"
+        from src.collectors.nuclei_collector import NucleiCollector
+        nuc_res = NucleiCollector().check_readiness()
+        nuclei_status = "Operational" if nuc_res.get("ready") else "Unavailable"
     except Exception:
         pass
 
@@ -422,7 +422,7 @@ def view_recon_live(
             scanner_statuses=bundle["scanner_statuses"],
             evidence=evidence,
             nessus_status=nessus_status,
-            greenbone_status=greenbone_status,
+            nuclei_status=nuclei_status,
             scan_categories=selected_cats,
             live_ctx=live_ctx,
         ),

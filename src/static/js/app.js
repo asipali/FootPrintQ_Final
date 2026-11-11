@@ -255,7 +255,18 @@
       grid.appendChild(createHealthCard('Campaign Data Store', data.database?.status || 'Active', 'Persistent campaign and findings storage'));
       grid.appendChild(createHealthCard('Evidence Archive', data.object_storage?.status || 'ONLINE', 'Integrity-verified artifact preservation'));
       grid.appendChild(createHealthCard('Network Assessment Engine', data.network_scanner?.status || 'ONLINE', 'Port, service & safety script scanner'));
-      grid.appendChild(createHealthCard('Greenbone / OpenVAS', data.vulnerability_scanners?.greenbone_openvas?.status || 'UNAVAILABLE', 'Deep vulnerability engine status'));
+      const nucleiData = data.vulnerability_scanners?.nuclei || {};
+      grid.appendChild(createHealthCard(
+        'ProjectDiscovery Nuclei',
+        nucleiData.status || 'UNAVAILABLE',
+        `${nucleiData.version || 'Nuclei'} • ${nucleiData.templates_count || 0} templates • ${nucleiData.profiles_count || 0} safe profiles`
+      ));
+      const graphData = data.graph_intelligence || {};
+      grid.appendChild(createHealthCard(
+        'Entity Graph & Maltego',
+        graphData.status || 'ONLINE',
+        graphData.mode || 'Correlation + GraphML/CSV Interchange'
+      ));
 
       // Enhanced Tenable Nessus Card with Live Connection Testing
       const nessusData = data.vulnerability_scanners?.nessus || {};

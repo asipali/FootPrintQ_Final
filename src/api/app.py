@@ -1,7 +1,8 @@
 """
 FootprintIQ - Enterprise FastAPI Application Entry Point
-Integrates OSINT reconnaissance, Nmap network scanning, NSE vulnerability scripts,
-Greenbone/OpenVAS, Nessus, SQL Server 2022 Express, and SeaweedFS object storage.
+Integrates OSINT reconnaissance (theHarvester, WHOIS/RDAP/DNS), Nmap network scanning,
+Nmap NSE scripts, ProjectDiscovery Nuclei, Tenable Nessus, Investigation Entity Graph
+correlation, SQL Server 2022 Express, and SeaweedFS object storage.
 """
 
 import os
@@ -29,7 +30,7 @@ except ImportError:
     pass
 
 from src.api.routers import (
-    auth, investigations, targets, scans, findings, evidence, reports, health, ui, recon, nessus, admin
+    auth, investigations, targets, scans, findings, evidence, reports, health, ui, recon, nessus, nuclei, graph, admin
 )
 from src.db.session import init_engine
 from src.db.repository import FootprintIQRepository
@@ -222,6 +223,8 @@ app.include_router(evidence.router)
 app.include_router(reports.router)
 app.include_router(health.router)
 app.include_router(nessus.router)
+app.include_router(nuclei.router)
+app.include_router(graph.router)
 
 # Include UI Dashboard router
 app.include_router(ui.router)

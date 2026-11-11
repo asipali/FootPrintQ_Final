@@ -3,11 +3,12 @@ FootprintIQ - Unified Investigation Report Generator
 Produces professional executive PDF investigation reports covering:
 - Executive summary & overall exposure score (0 - 100)
 - Investigation scope & authorized targets
-- OSINT passive reconnaissance findings
-- Discovered network services & ports
+- OSINT passive reconnaissance findings (theHarvester, WHOIS/RDAP/DNS)
+- Discovered network services & ports (Nmap)
 - Nmap NSE findings
-- Greenbone / OpenVAS findings
-- Nessus scanner findings
+- ProjectDiscovery Nuclei findings
+- Nessus scanner findings (and preserved historical Greenbone/OpenVAS records)
+- Investigation entity & relationship graph summary (Maltego-compatible)
 - Correlated vulnerabilities & severity distribution
 - Cryptographic evidence hashes (SHA-256) & SeaweedFS references
 - Prioritized remediation roadmap
@@ -381,8 +382,15 @@ class UnifiedReportGenerator:
 
         elements.append(Spacer(1, 10))
 
-        # 6. Evidence & Integrity
-        elements.append(Paragraph("6. Collected Evidence References & Integrity Verification", h2_style))
+        # 6. Evidence & Entity Graph Summary
+        elements.append(Paragraph("6. Collected Evidence References &amp; Entity Graph Attribution", h2_style))
+        graph_ev = [ev for ev in (evidence or []) if ev.get("evidence_type") in ("intelligence_graph_json", "maltego_import", "intelligence_graph_overlay")]
+        if graph_ev:
+            elements.append(Paragraph(
+                f"<b>Investigation Entity Graph / Maltego Interchange:</b> {len(graph_ev)} integrity-verified graph artifact(s) archived (GraphML/Maltego CSV export available in platform).",
+                body_style,
+            ))
+            elements.append(Spacer(1, 4))
         if evidence:
             ev_rows = [["Type", "File Name", "Size (bytes)", "SHA-256 Digest", "Storage Ref"]]
             for ev in evidence[:20]:

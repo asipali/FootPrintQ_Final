@@ -4,7 +4,7 @@
 
 **FootprintIQ** is an enterprise-grade digital footprint investigation, OSINT reconnaissance, network discovery, multi-scanner vulnerability assessment, evidence correlation, and security reporting platform.
 
-Developed as the production evolution of the OSINT-RECON Digital Footprint Investigator, FootprintIQ unifies passive OSINT intelligence, active network reconnaissance, policy-controlled Nmap Scripting Engine (NSE) scripts, Greenbone/OpenVAS vulnerability assessments, and Tenable Nessus integration into a single web dashboard and REST API.
+Developed as the production evolution of the OSINT-RECON Digital Footprint Investigator, FootprintIQ unifies passive OSINT intelligence (theHarvester, WHOIS/RDAP, DNS OSINT), active network reconnaissance (Nmap), policy-controlled Nmap Scripting Engine (NSE) checks, ProjectDiscovery Nuclei template vulnerability scanning, honest Tenable Nessus read-only inspection/import, and Maltego-compatible Entity & Relationship Graph correlation into a single web dashboard and REST API.
 
 ### Engineering Team
 - **Asip Ali**
@@ -20,13 +20,14 @@ Developed as the production evolution of the OSINT-RECON Digital Footprint Inves
 | **Application Database** | Microsoft SQL Server 2022 Express | Pure MSSQL dialect (`mssql+pymssql`), SQLAlchemy ORM (`src/db/`) |
 | **Database Migrations** | Alembic | Reversible T-SQL migrations targeting SQL Server 2022 (`alembic/`) |
 | **Evidence Storage** | SeaweedFS (weed v3.64) | Distributed object storage with SHA-256 integrity checks (`src/storage/`) |
-| **Passive OSINT** | WHOIS, RDAP, DNS, theHarvester | Domain, IP, entity, and sub-domain intelligence (`src/collectors/`) |
-| **Active Network Recon** | Nmap (v7.95) | Fast/full port discovery, service detection, OS detection (`src/collectors/nmap_collector.py`) |
-| **Script Vulnerability Checks** | Nmap NSE | Safe, policy-enforced vulnerability script execution (`src/collectors/nse_collector.py`) |
-| **Vulnerability Scanner** | Greenbone / OpenVAS | GMP socket protocol, active SCAP/VT feed integration (`src/collectors/greenbone_collector.py`) |
-| **Secondary Scanner** | Tenable Nessus | Independent REST API adapter with offline simulation fallback (`src/collectors/nessus_collector.py`) |
+| **Passive OSINT** | WHOIS, RDAP, DNS, theHarvester | Domain, IP, email, and sub-domain intelligence (`src/collectors/`) |
+| **Active Network Recon** | Nmap | Host discovery, TCP/UDP port discovery, service/version & OS detection (`src/collectors/nmap_collector.py`) |
+| **Script Vulnerability Checks** | Nmap NSE | Safe, policy-enforced HTTP, SSL/TLS, SMB, DNS, SSH, FTP & vuln script execution (`src/collectors/nse_collector.py`) |
+| **Template Vulnerability Scanner** | ProjectDiscovery Nuclei | Policy-governed CVEs, web misconfigurations, exposed panels & SSL/TLS scanning (`src/collectors/nuclei_collector.py`) |
+| **Enterprise Scanner Adapter** | Tenable Nessus | Live REST API authentication, scanner/template inspection, existing scan results & report import (`src/collectors/nessus_collector.py`) |
+| **Entity Graph & Interchange** | IntelligenceGraph + Maltego Interchange | Investigation entity-relationship correlation with GraphML, CSV & JSON import/export (`src/services/graph_intelligence_service.py`) |
 | **Exposure Engine** | FootprintIQ Risk Scoring | Asymptotic exposure score (0 - 100), multi-scanner corroboration boost |
-| **Reporting Engine** | ReportLab | Executive PDF generation with cryptographic evidence catalog (`src/reporting/`) |
+| **Reporting Engine** | ReportLab | Executive & Technical PDF generation with evidence catalog & Entity Graph provenance (`src/reporting/`) |
 
 ---
 
@@ -40,7 +41,8 @@ Developed as the production evolution of the OSINT-RECON Digital Footprint Inves
   - `eth1`: Host-Only (`192.168.56.106/24`) — Isolated lab network.
 - **Authorized Target VM:** Metasploitable2 (`192.168.56.111`)
 - **SeaweedFS Object Storage:** Master port `9333`, Volume port `8080`.
-- **Greenbone Services:** GVMD socket `/run/gvmd/gvmd.sock`, OSPD socket `/run/ospd/ospd-openvas.sock`, GSAD Web UI `https://127.0.0.1:9392`.
+- **Nuclei Templates:** Local ProjectDiscovery templates (`~/.local/nuclei-templates`) with policy exclusions enforced by `NucleiPolicyService`.
+- **Historical Record Compatibility:** Previously imported historical Greenbone/OpenVAS XML reports remain readable via `src/parsers/greenbone_parser.py` and persisted SQL Server findings, while active Greenbone daemon execution is intentionally removed.
 
 ---
 
@@ -67,12 +69,13 @@ OSINT-RECON/
 │   │   ├── dependencies.py     # JWT & RBAC security dependencies
 │   │   └── routers/            # auth, investigations, targets, scans, findings, evidence, reports, health, ui
 │   ├── authorization/          # Strict fail-closed target authorizer
-│   ├── collectors/             # whois, dns, theharvester, nmap, nse, greenbone, nessus, rdap
+│   ├── collectors/             # whois, dns, theharvester, nmap, nse, nuclei, nessus, rdap
+│   ├── correlation/            # Cross-source correlation & IntelligenceGraph entity model
 │   ├── db/                     # SQL Server session, SQLAlchemy models, repository
-│   ├── orchestration/          # Unified orchestrator (all 7 scan modes)
+│   ├── orchestration/          # Unified orchestrator (passive, active, nmap_nse, nuclei, nessus, combined)
 │   ├── processors/             # Normalizers & cross-scanner correlators
 │   ├── reporting/              # Unified PDF report generator
-│   ├── services/               # AuthService, NSEPolicyService, ExposureScoringEngine
+│   ├── services/               # AuthService, NSEPolicyService, NucleiPolicyService, GraphIntelligenceService, ExposureScoringEngine
 │   ├── storage/                # SeaweedFS client with SHA-256 verification
 │   └── templates/              # Modern Jinja2 Web Dashboard templates
 ├── tests/                      # 147 unit and integration tests
@@ -98,8 +101,11 @@ python main.py --server --host 0.0.0.0 --port 8000
 
 ### C. Execute Unified CLI Scans
 ```bash
-# Combined Multi-Scanner Assessment against authorized Metasploitable2:
+# Combined Multi-Scanner Assessment (Nmap + NSE + Nuclei):
 python main.py --unified-scan combined --target 192.168.56.111
+
+# ProjectDiscovery Nuclei Safe Template Scan:
+python main.py --unified-scan nuclei --target 192.168.56.111
 
 # Policy-Controlled Nmap NSE Vulnerability Check:
 python main.py --unified-scan nmap_nse --target 192.168.56.111

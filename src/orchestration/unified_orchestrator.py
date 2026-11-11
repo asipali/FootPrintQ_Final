@@ -5,8 +5,8 @@ Orchestrates multi-scanner and reconnaissance workflows across:
 2. Network Discovery (Host reachability, Ping sweep)
 3. Nmap Service Discovery (Service versions, OS detection)
 4. Nmap NSE Assessment (Policy-controlled vulnerability scripts)
-5. Greenbone / OpenVAS Assessment (GMP socket, active SCAP/VT)
-6. Nessus Assessment (Tenable Nessus adapter / verified simulation)
+5. ProjectDiscovery Nuclei Assessment (Safe template-based CVE/Web/SSL scanning)
+6. Tenable Nessus Assessment (Read-only inspection / licensed API scan)
 7. Combined Multi-Engine Assessment (Cross-scanner correlation & unified exposure scoring)
 """
 
@@ -19,12 +19,11 @@ from datetime import datetime, timezone
 from src.authorization.target_authorizer import TargetAuthorizer
 from src.collectors.nse_collector import NSECollector
 from src.collectors.nessus_collector import NessusCollector
+from src.collectors.nuclei_collector import NucleiCollector
 from src.collectors.rdap_collector import RDAPCollector
-from src.collectors.greenbone_collector import GreenboneCollector
 from src.collectors.passive_intel_collector import PassiveIntelCollector
 from src.orchestration.passive_pipeline import PassiveReconPipeline
 from src.orchestration.active_pipeline import ActiveReconPipeline
-from src.orchestration.vulnerability_pipeline import VulnerabilityPipeline
 from src.processors.vulnerability_correlator import VulnerabilityCorrelator
 from src.services.exposure_scoring import ExposureScoringEngine
 from src.storage.seaweedfs_client import SeaweedFSClient
@@ -44,6 +43,7 @@ class UnifiedScanOrchestrator:
         self.authorizer = authorizer or TargetAuthorizer()
         self.storage = storage_client or SeaweedFSClient()
         self.nse_collector = NSECollector(authorizer=self.authorizer, storage_client=self.storage)
+        self.nuclei_collector = NucleiCollector(storage=self.storage, authorizer=self.authorizer)
         self.nessus_collector = NessusCollector()
         self.rdap_collector = RDAPCollector()
         self.passive_collector = PassiveIntelCollector()
@@ -54,10 +54,13 @@ class UnifiedScanOrchestrator:
         scan_type: str,
         target: str,
         profile: str = "default",
-        custom_scripts: Optional[List[str]] = None
+        custom_scripts: Optional[List[str]] = None,
+        nuclei_profile: Optional[str] = None,
+        nuclei_tags: Optional[List[str]] = None,
+        nuclei_severities: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Unified dispatch entry point for all 7 scan types.
+        Unified dispatch entry point for all supported FootprintIQ scan workflows.
         """
         # Create execution record
         scan_rec = self.repo.create_scan_execution(
@@ -77,21 +80,42 @@ class UnifiedScanOrchestrator:
                 result = self._run_nmap_services(target, profile, investigation_id, scan_id)
             elif scan_type == "nmap_nse":
                 result = self._run_nmap_nse(target, custom_scripts, investigation_id, scan_id)
-            elif scan_type == "greenbone":
-                result = self._run_greenbone(target, investigation_id, scan_id)
+            elif scan_type == "nuclei":
+                result = self._run_nuclei(
+                    target,
+                    investigation_id,
+                    scan_id,
+                    profile=nuclei_profile or "http-security",
+                    tags=nuclei_tags,
+                    severities=nuclei_severities,
+                )
             elif scan_type == "nessus":
                 result = self._run_nessus(target, investigation_id, scan_id)
             elif scan_type == "combined":
-                result = self._run_combined_assessment(target, profile, custom_scripts, investigation_id, scan_id)
+                result = self._run_combined_assessment(
+                    target,
+                    profile,
+                    custom_scripts,
+                    investigation_id,
+                    scan_id,
+                    nuclei_profile=nuclei_profile or "safe-all",
+                )
+            elif scan_type == "greenbone":
+                raise ValueError(
+                    "Active Greenbone/OpenVAS execution has been removed from FootprintIQ. Use 'nuclei' or 'nmap_nse' instead."
+                )
             else:
                 raise ValueError(f"Unknown scan type: {scan_type}")
 
-            # Mark completed in DB
+            # Mark final status accurately in DB
+            exec_status = "failed" if result.get("status") == "FAILED" else "completed"
             self.repo.update_scan_execution(
                 scan_id=scan_id,
-                status="completed",
+                status=exec_status,
+                error_message=result.get("error") if exec_status == "failed" else None,
                 result_summary_json=json.dumps({
                     "target": target,
+                    "status": result.get("status"),
                     "findings_count": len(result.get("findings", [])),
                     "vulnerabilities": result.get("vulnerabilities_found", 0)
                 })
@@ -125,7 +149,15 @@ class UnifiedScanOrchestrator:
         try:
             pipeline = PassiveReconPipeline()
             summary_obj = pipeline.run(target_domain=target)
-            summary = summary_obj.to_dict() if hasattr(summary_obj, "to_dict") else (summary_obj if isinstance(summary_obj, dict) else {})
+            summary_obj = getattr(res, "summary", None)
+            if hasattr(summary_obj, "model_dump"):
+                summary = summary_obj.model_dump()
+            elif hasattr(summary_obj, "to_dict"):
+                summary = summary_obj.to_dict()
+            elif isinstance(summary_obj, dict):
+                summary = summary_obj
+            else:
+                summary = {}
         except Exception as e:
             logger.info(f"Passive pipeline run note for {target}: {e}")
 
@@ -329,55 +361,74 @@ class UnifiedScanOrchestrator:
 
         return nse_res
 
-    def _run_greenbone(self, target: str, investigation_id: str, scan_id: str) -> Dict[str, Any]:
-        """Runs Greenbone/OpenVAS vulnerability assessment."""
-        auth = self.authorizer.authorize_target(target, profile="lab-basic")
-        if not auth.authorized:
-            raise PermissionError(f"Target '{target}' is not authorized: {auth.failure_reason}")
+    def _run_nuclei(
+        self,
+        target: str,
+        investigation_id: str,
+        scan_id: str,
+        profile: str = "http-security",
+        severities: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        template_ids: Optional[List[str]] = None,
+        discovered_ports: Optional[List[Dict[str, Any]]] = None,
+        cancel_event=None,
+        rate_limit: int = 30,
+    ) -> Dict[str, Any]:
+        """Runs policy-governed ProjectDiscovery Nuclei vulnerability scan and archives evidence."""
+        nuc_res = self.nuclei_collector.run_scan(
+            target=target,
+            investigation_id=investigation_id,
+            scan_id=scan_id,
+            profile=profile,
+            severities=severities,
+            tags=tags,
+            template_ids=template_ids,
+            discovered_ports=discovered_ports,
+            cancel_event=cancel_event,
+            repo=self.repo,
+            rate_limit=rate_limit,
+        )
+        findings = nuc_res.get("findings") or []
+        for f in findings:
+            self.repo.add_vulnerability_finding(investigation_id, f, scan_id=scan_id)
 
-        pipeline = VulnerabilityPipeline()
-        res = pipeline.run(target=target)
-        findings = []
-
-        if res and hasattr(res, "findings"):
-            for vf in res.findings:
-                f_dict = {
-                    "finding_id": f"OPENVAS-{target.replace('.', '_')}-{vf.port}-{vf.scanner_vt_id or 'vt'}",
-                    "investigation_id": investigation_id,
-                    "scan_id": scan_id,
-                    "target_ip": target,
-                    "port": vf.port,
-                    "protocol": vf.protocol,
-                    "service": vf.service,
-                    "title": vf.title,
-                    "description": vf.description,
-                    "cve_identifiers": ",".join(vf.cves) if hasattr(vf, "cves") and vf.cves else None,
-                    "cvss_score": vf.cvss_score,
-                    "severity": vf.severity,
-                    "confidence": vf.confidence,
-                    "detection_source": "openvas",
-                    "scanner_vt_id": vf.scanner_vt_id,
-                    "remediation": vf.solution,
-                    "verification_status": "verified"
-                }
-                findings.append(f_dict)
-                self.repo.add_vulnerability_finding(investigation_id, f_dict, scan_id=scan_id)
+        ev = nuc_res.get("evidence")
+        if isinstance(ev, dict) and ev.get("file_name"):
+            try:
+                self.repo.add_evidence_record(
+                    investigation_id=investigation_id,
+                    evidence_type="nuclei_jsonl",
+                    file_name=ev["file_name"],
+                    file_size=ev["file_size"],
+                    sha256_hash=ev["sha256_hash"],
+                    seaweed_fid=ev.get("seaweed_fid"),
+                    seaweed_url=ev.get("seaweed_url"),
+                    local_path=ev.get("local_path"),
+                    scan_id=scan_id,
+                )
+            except Exception as ev_err:
+                logger.warning(f"SeaweedFS DB record notice for Nuclei JSONL: {ev_err}")
 
         return {
-            "status": "COMPLETED",
-            "scan_type": "greenbone",
+            "status": nuc_res.get("status", "COMPLETED"),
+            "scan_type": "nuclei",
             "target": target,
+            "targets_scanned": nuc_res.get("targets_scanned", []),
+            "applied_policy": nuc_res.get("applied_policy", {}),
             "vulnerabilities_found": len(findings),
-            "findings": findings
+            "findings": findings,
+            "evidence": ev,
+            "error": nuc_res.get("error"),
         }
 
     def _run_nessus(self, target: str, investigation_id: str, scan_id: str, template_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Runs Nessus vulnerability assessment or verified simulation, archiving evidence in SeaweedFS."""
+        """Runs live Tenable Nessus assessment when scan_api is permitted; never fakes simulated findings."""
         nessus_res = self.nessus_collector.scan_target(
             target=target,
             investigation_id=investigation_id,
             scan_id=scan_id,
-            template_uuid=template_uuid
+            template_uuid=template_uuid,
+            allow_simulation=False,
         )
         findings = nessus_res.get("findings", [])
         for f in findings:
@@ -416,60 +467,91 @@ class UnifiedScanOrchestrator:
         profile: str,
         custom_scripts: Optional[List[str]],
         investigation_id: str,
-        scan_id: str
+        scan_id: str,
+        nuclei_profile: str = "safe-all",
     ) -> Dict[str, Any]:
         """
         Executes a complete combined assessment across:
         1. Nmap Service Detection
         2. Nmap NSE Vulnerability Checks
-        3. Nessus Assessment
-        4. Greenbone / OpenVAS Assessment (if feed/daemon is operational)
+        3. ProjectDiscovery Nuclei Safe Templates (using discovered HTTP/TLS ports)
+        4. Tenable Nessus Assessment (only if connected and scan_api_enabled=True)
         Correlates all findings and calculates exposure score.
         """
-        all_findings = []
-        scanners_executed = []
-        scanners_skipped = []
+        all_findings: List[Dict[str, Any]] = []
+        scanners_executed: List[str] = []
+        scanners_skipped: List[Dict[str, Any]] = []
 
         # 1. Nmap Services
         services_res = self._run_nmap_services(target, profile, investigation_id, scan_id)
         scanners_executed.append("nmap_services")
+        discovered_ports: List[Dict[str, Any]] = []
+        for h in (services_res.get("hosts") or []):
+            for p in (h.get("ports") or []):
+                if str(p.get("state") or "open").lower() == "open":
+                    discovered_ports.append({
+                        "target_ip": h.get("ip") or target,
+                        "port": p.get("port"),
+                        "protocol": p.get("protocol", "tcp"),
+                        "service": p.get("service", ""),
+                        "service_version": p.get("version") or "",
+                    })
 
         # 2. NSE Vulnerability Checks
         nse_res = self._run_nmap_nse(target, custom_scripts, investigation_id, scan_id)
         all_findings.extend(nse_res.get("findings", []))
         scanners_executed.append("nmap_nse")
 
-        # 3. Nessus
-        nessus_res = self._run_nessus(target, investigation_id, scan_id)
-        all_findings.extend(nessus_res.get("findings", []))
-        scanners_executed.append("nessus")
+        # 3. ProjectDiscovery Nuclei
+        nuc_ready = self.nuclei_collector.check_readiness()
+        if nuc_ready.get("ready"):
+            nuc_res = self._run_nuclei(
+                target=target,
+                investigation_id=investigation_id,
+                scan_id=scan_id,
+                profile=nuclei_profile,
+                discovered_ports=discovered_ports,
+            )
+            all_findings.extend(nuc_res.get("findings", []))
+            scanners_executed.append("nuclei")
+        else:
+            scanners_skipped.append({"scanner": "nuclei", "reason": nuc_ready.get("reason") or "Nuclei unavailable"})
 
-        # 4. Greenbone / OpenVAS (probe readiness before invoking)
-        greenbone_status = "UNAVAILABLE"
+        # 4. Tenable Nessus (only when scan_api_enabled=True; honest skip on read-only license)
+        nessus_status = "READ_ONLY"
         try:
-            gb_collector = GreenboneCollector()
-            readiness = GreenboneCollector.normalize_readiness(gb_collector.check_readiness())
-            if readiness.get("ready"):
-                gb_res = self._run_greenbone(target, investigation_id, scan_id)
-                all_findings.extend(gb_res.get("findings", []))
-                scanners_executed.append("greenbone")
-                greenbone_status = "ONLINE"
-            elif readiness.get("checks", {}).get("socket_reachable"):
-                greenbone_status = "UNAVAILABLE"
-                reason = "; ".join(readiness.get("errors", [])) or "Feed synchronization or authentication not ready"
-                scanners_skipped.append({"scanner": "greenbone", "reason": reason})
+            n_conn = self.nessus_collector.test_connection()
+            if n_conn.get("connected") and n_conn.get("scan_api_enabled", False):
+                nessus_res = self._run_nessus(target, investigation_id, scan_id)
+                all_findings.extend(nessus_res.get("findings", []))
+                scanners_executed.append("nessus")
+                nessus_status = "ONLINE"
+            elif n_conn.get("connected"):
+                nessus_status = "READ_ONLY"
+                scanners_skipped.append({
+                    "scanner": "nessus",
+                    "reason": n_conn.get("limitations") or "Nessus Essentials operates in Read-Only mode (scan_api=false); import existing Nessus scan results separately.",
+                })
             else:
-                greenbone_status = "UNAVAILABLE"
-                reason = "; ".join(readiness.get("errors", [])) or "Greenbone daemon/socket unavailable"
-                scanners_skipped.append({"scanner": "greenbone", "reason": reason})
+                nessus_status = "UNAVAILABLE"
+                scanners_skipped.append({
+                    "scanner": "nessus",
+                    "reason": n_conn.get("error") or "Tenable Nessus is disconnected.",
+                })
         except Exception as e:
-            logger.warning(f"Combined scan Greenbone integration check skipped: {e}")
-            greenbone_status = "UNAVAILABLE"
-            scanners_skipped.append({"scanner": "greenbone", "reason": str(e)})
+            nessus_status = "UNAVAILABLE"
+            scanners_skipped.append({"scanner": "nessus", "reason": str(e)})
 
-        # 5. Exposure scoring and correlation
+        # 5. Exposure scoring and Investigation Entity Graph synthesis
         exposure_report = ExposureScoringEngine.calculate_investigation_exposure(all_findings)
         self.repo.update_exposure_score(investigation_id, exposure_report["exposure_score"])
+        try:
+            from src.services.graph_intelligence_service import GraphIntelligenceService
+            GraphIntelligenceService(repo=self.repo, storage=self.storage).sync_campaign_graph(
+                investigation_id, scan_id=scan_id
+            )
+        except Exception as graph_err:
+            logger.warning(f"Combined scan graph synthesis notice: {graph_err}")
 
         return {
             "status": "COMPLETED",
@@ -477,7 +559,8 @@ class UnifiedScanOrchestrator:
             "target": target,
             "scanners_executed": scanners_executed,
             "scanners_skipped": scanners_skipped,
-            "greenbone_status": greenbone_status,
+            "nuclei_status": "ONLINE" if nuc_ready.get("ready") else "UNAVAILABLE",
+            "nessus_status": nessus_status,
             "vulnerabilities_found": len(all_findings),
             "findings": all_findings,
             "exposure_summary": exposure_report

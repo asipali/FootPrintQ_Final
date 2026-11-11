@@ -19,7 +19,7 @@ from src.orchestration.passive_pipeline import PassiveReconPipeline
 from src.orchestration.active_pipeline import ActiveReconPipeline
 from src.correlation.correlation_engine import CorrelationEngine
 from src.orchestration.vulnerability_pipeline import VulnerabilityPipeline
-from src.collectors.greenbone_collector import GreenboneCollector
+from src.collectors.nuclei_collector import NucleiCollector
 
 
 def print_passive_banner():
@@ -99,9 +99,9 @@ Examples:
   python main.py --correlate --passive-input data/processed/SCAN-PASSIVE_report.json --active-input data/processed/SCAN-ACTIVE_report.json
   python main.py --correlate --json-only
 
-  # Vulnerability Assessment (Greenbone/OpenVAS on authorized lab target):
-  python main.py --vulnerability-scan --target 192.168.56.111
-  python main.py --vulnerability-scan --target 192.168.56.111 --scan-config "Full and fast"
+  # Vulnerability & Unified Assessment (Nuclei, Nmap NSE, Nessus):
+  python main.py --unified-scan nuclei --target 127.0.0.1
+  python main.py --vulnerability-scan --target 192.168.56.111 --import-report scans/historical.xml
   python main.py --check-readiness
         """
     )
@@ -129,25 +129,25 @@ Examples:
         "--vulnerability-scan",
         dest="vulnerability_scan",
         action="store_true",
-        help="Enable Greenbone/OpenVAS vulnerability assessment mode (W5)"
+        help="Correlate historical vulnerability XML reports (--import-report) or check legacy status"
     )
     parser.add_argument(
         "--scan-config",
         dest="scan_config",
         default="Full and fast",
-        help="Greenbone scan configuration (default: 'Full and fast')"
+        help="Historical report metadata configuration label"
     )
     parser.add_argument(
         "--import-report",
         dest="import_report",
         default=None,
-        help="Path to an existing Greenbone XML report file to import and correlate"
+        help="Path to a historical Greenbone/OpenVAS XML report file to import and correlate"
     )
     parser.add_argument(
         "--check-readiness",
         dest="check_readiness",
         action="store_true",
-        help="Perform Greenbone service, scanner, and feed readiness diagnostics"
+        help="Perform Nuclei, Nessus, Nmap, OSINT, and Entity Graph readiness diagnostics"
     )
     parser.add_argument(
         "--passive-input",
@@ -212,7 +212,7 @@ Examples:
     parser.add_argument(
         "--unified-scan",
         dest="unified_scan",
-        choices=["passive", "network_discovery", "nmap_services", "nmap_nse", "greenbone", "nessus", "combined"],
+        choices=["passive", "network_discovery", "nmap_services", "nmap_nse", "nuclei", "nessus", "combined"],
         help="Execute unified multi-scanner assessment across authorized engines"
     )
     parser.add_argument(
@@ -260,40 +260,25 @@ Examples:
         sys.exit(0 if result.get("status") in ("COMPLETED", "SUCCESS") else 1)
 
     elif args.check_readiness:
-        # Greenbone Readiness Diagnostics Mode (W5)
+        # Scanner & Tool Ecosystem Readiness Diagnostics Mode
         print_vulnerability_banner()
-        print("[*] Running Greenbone / OpenVAS service, scanner, and feed diagnostics...")
-        collector = GreenboneCollector()
-        is_ready, details = collector.check_readiness()
+        print("[*] Running ProjectDiscovery Nuclei, Tenable Nessus, and Entity Graph diagnostics...")
+        nuc = NucleiCollector().check_readiness()
+        from src.collectors.nessus_collector import NessusCollector
+        from src.services.graph_intelligence_service import GraphIntelligenceService
+        nessus_caps = NessusCollector().get_api_capabilities()
+        graph_rt = GraphIntelligenceService.get_maltego_runtime_status()
 
         print("\n" + "=" * 72)
-        print("  GREENBONE / OPENVAS OPERATIONAL READINESS AUDIT")
+        print("  FOOTPRINTIQ VULNERABILITY & GRAPH READINESS AUDIT")
         print("=" * 72)
-        print(f"  Overall Readiness:    {'READY' if is_ready else 'NOT READY / BLOCKED'}")
-        print(f"  GVM Socket Exists:    {details.get('socket_exists')}")
-        print(f"  Daemon Connected:     {details.get('connected')}")
-        print(f"  Authenticated:        {details.get('authenticated')}")
-        print(f"  GVM Version:          {details.get('gvm_version') or 'Unavailable'}")
-        print(f"  Scanners Available:   {len(details.get('scanners', []))}")
-        print(f"  Feeds Available:      {len(details.get('feeds', []))}")
-        print("-" * 72)
-
-        if details.get("errors"):
-            print("  READINESS BLOCKERS / ERRORS:")
-            for err in details["errors"]:
-                print(f"   [!] {err}")
-            print("-" * 72)
-            print("  RECOMMENDED RESOLUTION STEPS:")
-            print("   1. Verify PostgreSQL and gvmd daemons are running:")
-            print("      sudo systemctl start postgresql gvmd ospd-openvas")
-            print("   2. Run Greenbone setup / feed sync script:")
-            print("      sudo gvm-setup   (or 'sudo greenbone-feed-sync')")
-            print("   3. Configure GVM credentials in your environment:")
-            print("      export GVM_USER='admin' && export GVM_PASSWORD='<password>'")
-        else:
-            print("  [+] Greenbone Vulnerability Manager daemon and feeds are fully operational.")
-        print("=" * 72 + "\n")
-        sys.exit(0 if is_ready else 2)
+        print(f"  Nuclei Ready:         {'READY' if nuc.get('ready') else 'UNAVAILABLE'} ({nuc.get('version')})")
+        print(f"  Nuclei Templates:     {nuc.get('templates_count', 0)} loaded")
+        print(f"  Nessus Status:        {nessus_caps.get('status')} ({nessus_caps.get('nessus_type') or 'Unconfigured'})")
+        print(f"  Nessus Scan Launch:   {'Enabled' if nessus_caps['capabilities']['scan_launch'] else 'Read-Only (scan_api=false)'}")
+        print(f"  Graph / Maltego:      {graph_rt.get('mode')}")
+        print("-" * 72 + "\n")
+        sys.exit(0 if nuc.get("ready") else 2)
 
     elif args.vulnerability_scan:
         # Vulnerability Assessment Mode (W5)

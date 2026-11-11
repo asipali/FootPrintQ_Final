@@ -1,6 +1,6 @@
 """
 FootprintIQ - Manual Reconnaissance Options & Real-Time Scanner Capabilities Catalog
-Provides dynamically verified passive, active, NSE, Nessus, and Greenbone options,
+Provides dynamically verified passive, active, NSE, ProjectDiscovery Nuclei, and Tenable Nessus options,
 built-in presets, and honest runtime availability statuses.
 """
 
@@ -9,9 +9,10 @@ import shutil
 from typing import Dict, Any, List
 
 from src.services.nse_policy_service import APPROVED_NSE_SCRIPTS
+from src.services.nuclei_policy_service import NucleiPolicyService
 from src.collectors.nmap_collector import NmapCollector, SUPPORTED_PROFILES
 from src.collectors.nessus_collector import NessusCollector
-from src.collectors.greenbone_collector import GreenboneCollector
+from src.collectors.nuclei_collector import NucleiCollector
 
 
 class ScanOptionsService:
@@ -425,6 +426,7 @@ class ScanOptionsService:
             "ssl_tls": [],
             "smb": [],
             "dns": [],
+            "ssh_ftp": [],
             "approved_vuln": []
         }
         for sid, meta in APPROVED_NSE_SCRIPTS.items():
@@ -454,10 +456,12 @@ class ScanOptionsService:
                     nse_groups["smb"].append(entry)
                 elif sid.startswith("dns-"):
                     nse_groups["dns"].append(entry)
+                elif sid.startswith(("ssh", "ftp-")):
+                    nse_groups["ssh_ftp"].append(entry)
                 else:
                     nse_groups["safe_discovery"].append(entry)
 
-        # 2. Live Tenable Nessus check
+        # 2. Live Tenable Nessus check (honest Read-Only vs Launch capability)
         nessus_status: Dict[str, Any]
         nessus_templates: List[Dict[str, Any]] = []
         try:
@@ -466,14 +470,16 @@ class ScanOptionsService:
             if n_conn.get("connected"):
                 all_tpls = nc.get_scan_templates()
                 nessus_templates = [t for t in all_tpls if t.get("is_available")]
-                scan_api_ok = n_conn.get("scan_api_enabled", True)
+                scan_api_ok = bool(n_conn.get("scan_api_enabled", False))
                 nessus_status = {
-                    "available": bool(scan_api_ok),
+                    "available": scan_api_ok,
                     "connected": True,
+                    "read_only": not scan_api_ok,
                     "status": "READY" if scan_api_ok else "READ_ONLY_LICENSE",
-                    "scan_api_enabled": bool(scan_api_ok),
+                    "scan_api_enabled": scan_api_ok,
+                    "nessus_type": n_conn.get("nessus_type") or ("Nessus Professional" if scan_api_ok else "Nessus Essentials"),
                     "reason": None if scan_api_ok else (
-                        n_conn.get("limitations") or "Connected to Nessus Essentials, which disables programmatic API scan launch (scan_api=false). Use Allowlisted Nmap NSE for automated live vulnerability scanning."
+                        n_conn.get("limitations") or "Connected to Nessus Essentials (Read-Only mode: auth, scanner info, scan listing, results & report import supported; programmatic scan launch disabled by license)."
                     ),
                     "server_version": n_conn.get("server_version") or n_conn.get("version"),
                     "template_count": len(nessus_templates),
@@ -483,6 +489,8 @@ class ScanOptionsService:
             else:
                 nessus_status = {
                     "available": False,
+                    "connected": False,
+                    "read_only": True,
                     "status": "UNAVAILABLE",
                     "reason": n_conn.get("error") or "Nessus API credentials or server unavailable.",
                     "templates": []
@@ -490,42 +498,37 @@ class ScanOptionsService:
         except Exception as e:
             nessus_status = {
                 "available": False,
+                "connected": False,
+                "read_only": True,
                 "status": "UNAVAILABLE",
                 "reason": str(e),
                 "templates": []
             }
 
-        # 3. Live Greenbone / OpenVAS check (strict honesty — never fake ready)
-        gb_status: Dict[str, Any]
-        try:
-            gb = GreenboneCollector()
-            readiness = GreenboneCollector.normalize_readiness(gb.check_readiness())
-            ready = bool(readiness.get("ready"))
-            gb_status = {
-                "available": ready,
-                "status": "READY" if ready else "UNAVAILABLE",
-                "reason": None if ready else "; ".join(readiness.get("errors", [])) or "Greenbone manager/feeds unavailable.",
-                "scan_configs": readiness.get("scan_configs", []),
-                "scanners": readiness.get("scanners", []),
-                "feed_status": readiness.get("feed_status", {}),
-                "checks": readiness.get("checks", {})
-            }
-        except Exception as e:
-            gb_status = {
-                "available": False,
-                "status": "UNAVAILABLE",
-                "reason": str(e),
-                "scan_configs": [],
-                "checks": {}
-            }
+        # 3. Live ProjectDiscovery Nuclei check (real local binary + verified templates)
+        nuclei_info = NucleiCollector().check_readiness()
+        nuclei_ready = bool(nuclei_info.get("ready"))
+        nuclei_status: Dict[str, Any] = {
+            "available": nuclei_ready,
+            "ready": nuclei_ready,
+            "status": "READY" if nuclei_ready else "UNAVAILABLE",
+            "version": nuclei_info.get("version"),
+            "templates_installed": bool(nuclei_info.get("templates_installed")),
+            "templates_count": nuclei_info.get("templates_count", 0),
+            "template_categories": nuclei_info.get("template_categories") or {},
+            "profiles": nuclei_info.get("profiles") or NucleiPolicyService.list_profiles(),
+            "reason": nuclei_info.get("reason"),
+        }
 
         nse_ok = bool(shutil.which("nmap") or os.path.exists("/usr/bin/nmap"))
-        combined_ready = bool(nessus_status["available"] and gb_status["available"])
-        available_engines = ["nse"] if nse_ok else []
-        if nessus_status["available"]:
+        available_engines: List[str] = []
+        if nse_ok:
+            available_engines.append("nse")
+        if nuclei_ready:
+            available_engines.append("nuclei")
+        if nessus_status.get("available"):
             available_engines.append("nessus")
-        if gb_status["available"]:
-            available_engines.append("greenbone")
+        combined_ready = bool(nse_ok and nuclei_ready)
 
         presets = {
             "quick_vuln_check": {
@@ -544,27 +547,29 @@ class ScanOptionsService:
                 "available": nse_ok,
                 "scripts": ["banner", "ftp-anon", "ftp-vsftpd-backdoor", "smb-os-discovery", "smb-security-mode", "smb-vuln-ms17-010", "http-title", "http-security-headers", "ssl-cert", "ssl-enum-ciphers", "ssl-heartbleed", "ssl-poodle"]
             },
+            "nuclei_assessment": {
+                "label": "ProjectDiscovery Nuclei Web & CVE Audit",
+                "description": "Safe template-driven CVE, HTTP security posture, SSL/TLS, and exposed panel scanning via Nuclei.",
+                "engine": "nuclei",
+                "engines": ["nuclei"],
+                "nuclei_profile": "safe-all",
+                "available": nuclei_ready,
+                "availability_note": None if nuclei_ready else nuclei_status.get("reason")
+            },
             "nessus_assessment": {
                 "label": "Nessus Assessment",
-                "description": "Executes live Tenable Nessus vulnerability assessment using live discovered templates.",
+                "description": "Executes live Tenable Nessus vulnerability assessment when scan launch API is licensed.",
                 "engine": "nessus",
                 "engines": ["nessus"],
                 "available": nessus_status["available"],
                 "availability_note": None if nessus_status["available"] else nessus_status.get("reason")
             },
-            "greenbone_assessment": {
-                "label": "Greenbone Assessment",
-                "description": "Executes Greenbone / OpenVAS Vulnerability Management scan when manager & feeds are ready.",
-                "engine": "greenbone",
-                "engines": ["greenbone"],
-                "available": gb_status["available"],
-                "availability_note": None if gb_status["available"] else gb_status.get("reason")
-            },
             "combined_assessment": {
-                "label": "Combined Assessment",
-                "description": "Runs all currently operational vulnerability engines together without silent fallback.",
+                "label": "Combined Assessment (NSE + Nuclei)",
+                "description": "Runs allowlisted Nmap NSE and ProjectDiscovery Nuclei together without silent fallback.",
                 "engine": "combined",
                 "engines": available_engines,
+                "nuclei_profile": "safe-all",
                 "available": len(available_engines) >= 1,
                 "availability_note": f"Active engines: {', '.join(e.upper() for e in available_engines)}"
             },
@@ -584,27 +589,29 @@ class ScanOptionsService:
             },
             "nessus_vuln_scan": {
                 "label": "Tenable Nessus Deep Vulnerability Scan",
-                "description": "Executes real Tenable Nessus vulnerability assessment using live discovered templates.",
+                "description": "Executes real Tenable Nessus vulnerability assessment when scan_api is licensed.",
                 "engine": "nessus",
                 "engines": ["nessus"],
                 "available": nessus_status["available"],
                 "availability_note": None if nessus_status["available"] else nessus_status.get("reason")
             },
-            "greenbone_vuln_scan": {
-                "label": "Greenbone / OpenVAS Full Scan",
-                "description": "Executes Greenbone Vulnerability Management scan when manager & feeds are ready.",
-                "engine": "greenbone",
-                "engines": ["greenbone"],
-                "available": gb_status["available"],
-                "availability_note": None if gb_status["available"] else gb_status.get("reason")
+            "nuclei_vuln_scan": {
+                "label": "Nuclei Safe CVE & Misconfiguration Scan",
+                "description": "Runs curated ProjectDiscovery Nuclei templates across CVEs, HTTP headers, SSL/TLS, and exposed panels.",
+                "engine": "nuclei",
+                "engines": ["nuclei"],
+                "nuclei_profile": "safe-all",
+                "available": nuclei_ready,
+                "availability_note": None if nuclei_ready else nuclei_status.get("reason")
             },
             "combined_vuln_scan": {
-                "label": "Combined Multi-Engine Assessment (Nessus + Greenbone)",
-                "description": "Correlates findings from both Tenable Nessus and Greenbone without silent fallback.",
-                "engine": "combined_nessus_greenbone",
-                "engines": ["nessus", "greenbone"],
+                "label": "Combined Multi-Engine Assessment (NSE + Nuclei)",
+                "description": "Correlates findings from allowlisted Nmap NSE and ProjectDiscovery Nuclei without silent fallback.",
+                "engine": "combined",
+                "engines": [e for e in ("nse", "nuclei") if e in available_engines] or available_engines,
+                "nuclei_profile": "safe-all",
                 "available": combined_ready,
-                "availability_note": None if combined_ready else "Requires both Tenable Nessus and Greenbone/OpenVAS to be operational simultaneously."
+                "availability_note": None if combined_ready else "Requires Nmap NSE and ProjectDiscovery Nuclei to be available."
             }
         }
 
@@ -615,12 +622,12 @@ class ScanOptionsService:
                 "vulnerability_scripts": nse_vuln,
                 "groups": nse_groups
             },
+            "nuclei": nuclei_status,
             "nessus": nessus_status,
-            "greenbone": gb_status,
             "combined": {
                 "available": combined_ready,
                 "operational_engines": available_engines,
-                "reason": None if combined_ready else "Combined Nessus + Greenbone scanning requires both engines to be operational."
+                "reason": None if combined_ready else "Combined multi-engine scanning requires Nmap NSE and ProjectDiscovery Nuclei."
             },
             "presets": presets
         }
@@ -648,7 +655,7 @@ class ScanOptionsService:
                     "id": "vulnerability",
                     "title": "VULNERABILITY ASSESSMENT",
                     "cta": "Explore Vulnerability Assessment",
-                    "description": "Execute allowlisted Nmap NSE security checks, live Tenable Nessus scans, or Greenbone assessments."
+                    "description": "Execute allowlisted Nmap NSE security checks, ProjectDiscovery Nuclei scans, or inspect Tenable Nessus capabilities."
                 }
             ],
             "passive": passive,

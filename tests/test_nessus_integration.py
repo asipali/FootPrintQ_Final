@@ -223,6 +223,125 @@ class TestNessusIntegration(unittest.TestCase):
         self.assertEqual(st["status"], "completed")
         self.assertEqual(st["progress"], 100)
 
+    def test_readonly_capabilities_scanners_scans_and_rbac_import(self):
+        """Verify read-only Nessus capability audit, scan listing, details, and RBAC-enforced import."""
+        from src.services.auth_service import hash_password
+        from src.db.repository import FootprintIQRepository
+
+        repo = FootprintIQRepository()
+        if not repo.get_user_by_username("nessus_qa_inv"):
+            repo.create_user(
+                username="nessus_qa_inv",
+                email="nessus_qa@footprintiq.internal",
+                hashed_password=hash_password("InvestigatorPass2026!"),
+                role="investigator",
+                is_approved=True,
+            )
+        inv_login = self.client.post(
+            "/api/v1/auth/login",
+            json={"username": "nessus_qa_inv", "password": "InvestigatorPass2026!"},
+        )
+        inv_headers = {"Authorization": f"Bearer {inv_login.json()['access_token']}"}
+
+        # Create campaign owned by investigator
+        camp_res = self.client.post(
+            "/api/v1/recon",
+            json={
+                "name": "Nessus ReadOnly Import Campaign",
+                "target_value": "127.0.0.1",
+                "selected_scan_types": "vulnerability",
+                "authorization_confirmed": True,
+            },
+            headers=inv_headers,
+        )
+        self.assertEqual(camp_res.status_code, 201)
+        recon_id = camp_res.json()["recon_id"]
+
+        with patch.object(
+            NessusCollector,
+            "get_api_capabilities",
+            return_value={
+                "connected": True,
+                "nessus_type": "Nessus Essentials",
+                "version": "10.12.4",
+                "capabilities": {
+                    "server_properties": True,
+                    "templates": True,
+                    "scanners": True,
+                    "scan_listing": True,
+                    "scan_status_and_results": True,
+                    "scan_export": True,
+                    "scan_launch": False,
+                },
+                "scanners_count": 1,
+                "scans_count": 1,
+                "templates_count": 14,
+            },
+        ):
+            cap_resp = self.client.get("/api/v1/scanners/nessus/capabilities", headers=self.headers)
+            self.assertEqual(cap_resp.status_code, 200)
+            self.assertFalse(cap_resp.json()["capabilities"]["scan_launch"])
+            self.assertTrue(cap_resp.json()["capabilities"]["scan_listing"])
+
+        with patch.object(
+            NessusCollector,
+            "get_scan_details",
+            return_value={
+                "available": True,
+                "scan_id": 8,
+                "name": "Lab Baseline",
+                "status": "completed",
+                "targets": "127.0.0.1",
+                "findings_count": 1,
+                "findings": [
+                    {
+                        "title": "Nessus HTTP Header Finding",
+                        "severity": "Low",
+                        "port": 80,
+                        "detection_source": "nessus",
+                    }
+                ],
+            },
+        ), patch.object(
+            NessusCollector,
+            "get_scan_status",
+            return_value={
+                "status": "completed",
+                "vulnerabilities": [
+                    {
+                        "plugin_id": 99999,
+                        "plugin_name": "Nessus HTTP Header Finding",
+                        "port": 80,
+                        "severity": 1,
+                        "risk_factor": "Low",
+                        "synopsis": "Missing header.",
+                        "description": "Missing security header.",
+                        "solution": "Add header.",
+                        "cvss_score": 2.6,
+                    }
+                ],
+            },
+        ), patch.object(
+            NessusCollector,
+            "export_scan_report",
+            return_value=b"<NessusClientData_v2/>",
+        ):
+            # Admin cannot mutate investigation via import (oversight-only RBAC)
+            adm_imp = self.client.post(
+                f"/api/v1/scanners/nessus/scans/8/import?investigation_id={recon_id}",
+                headers=self.headers,
+            )
+            self.assertEqual(adm_imp.status_code, 403)
+
+            # Owner investigator imports findings honestly
+            inv_imp = self.client.post(
+                f"/api/v1/scanners/nessus/scans/8/import?investigation_id={recon_id}",
+                headers=inv_headers,
+            )
+            self.assertEqual(inv_imp.status_code, 200)
+            self.assertEqual(inv_imp.json()["findings_imported"], 1)
+            self.assertIsNotNone(inv_imp.json()["evidence_file"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from src.api.app import app
-from src.collectors.greenbone_collector import GreenboneCollector
+from src.collectors.nuclei_collector import NucleiCollector
 from src.collectors.nessus_collector import NessusCollector
 from src.collectors.nmap_collector import NmapCollector
 from src.db.repository import FootprintIQRepository
@@ -69,8 +69,10 @@ class TestManualReconWorkflow(unittest.TestCase):
         self.assertIn("groups", data["passive"])
         self.assertIn("presets", data["passive"])
         self.assertIn("nse", data["vulnerability"])
+        self.assertIn("ssh_ftp", data["vulnerability"]["nse"]["groups"])
         self.assertIn("nessus", data["vulnerability"])
-        self.assertIn("greenbone", data["vulnerability"])
+        self.assertIn("nuclei", data["vulnerability"])
+        self.assertNotIn("greenbone", data["vulnerability"])
 
     def test_03_port_validation_endpoint(self):
         ok = self.client.post(
@@ -244,38 +246,57 @@ class TestManualReconWorkflow(unittest.TestCase):
         self.assertEqual(edit_page.status_code, 200)
         self.assertIn(recon_id.encode(), edit_page.content)
 
-    @patch("src.collectors.greenbone_collector.GreenboneCollector.check_readiness")
-    def test_07_greenbone_unavailable_blocks_launch_honestly(self, mock_gb_ready):
-        mock_gb_ready.return_value = {
+    @patch("src.collectors.nuclei_collector.NucleiCollector.check_readiness")
+    def test_07_greenbone_deprecated_and_nuclei_unavailable_blocks_honestly(self, mock_nuc_ready):
+        mock_nuc_ready.return_value = {
+            "available": False,
             "ready": False,
-            "errors": ["GVM manager socket unreachable"],
-            "checks": {"socket_reachable": False}
+            "status": "Unavailable",
+            "reason": "Nuclei binary missing in test",
         }
-        cfg = {
+        # 1. Deprecated greenbone engine request is explicitly rejected
+        cfg_gb = {
             "selected_categories": ["vulnerability"],
             "vulnerability": {"engine": "greenbone"}
         }
-        c = self.client.post(
+        c_gb = self.client.post(
             "/api/v1/recon",
             json={
-                "name": "Greenbone Check Test",
+                "name": "Deprecated Greenbone Reject Test",
                 "target_value": "192.168.56.111",
                 "selected_scan_types": "vulnerability",
-                "scan_config_json": json.dumps(cfg),
+                "scan_config_json": json.dumps(cfg_gb),
                 "authorization_confirmed": True
             },
             headers=self.inv_headers
         )
-        self.assertEqual(c.status_code, 201)
-        recon_id = c.json()["recon_id"]
+        self.assertEqual(c_gb.status_code, 400)
+        self.assertIn("Greenbone", c_gb.json()["detail"])
 
-        start_resp = self.client.post(
-            f"/api/v1/recon/{recon_id}/start",
+        # 2. Unavailable Nuclei blocks honestly instead of faking results
+        cfg_nuc = {
+            "selected_categories": ["vulnerability"],
+            "vulnerability": {"engine": "nuclei", "nuclei_profile": "http-security"}
+        }
+        c_nuc = self.client.post(
+            "/api/v1/recon",
+            json={
+                "name": "Nuclei Unavailable Check Test",
+                "target_value": "192.168.56.111",
+                "selected_scan_types": "vulnerability",
+                "scan_config_json": json.dumps(cfg_nuc),
+                "authorization_confirmed": True
+            },
+            headers=self.inv_headers
+        )
+        self.assertEqual(c_nuc.status_code, 201)
+        start_nuc = self.client.post(
+            f"/api/v1/recon/{c_nuc.json()['recon_id']}/start",
             json={"scan_type": "vulnerability"},
             headers=self.inv_headers
         )
-        self.assertEqual(start_resp.status_code, 400)
-        self.assertIn("Greenbone", start_resp.json()["detail"])
+        self.assertEqual(start_nuc.status_code, 400)
+        self.assertIn("Nuclei", start_nuc.json()["detail"])
 
     def test_08_nessus_manual_no_simulation_fallback(self):
         nc = NessusCollector()
@@ -389,11 +410,12 @@ class TestManualReconWorkflow(unittest.TestCase):
             for leaked in ["mssql+pymssql", "Swagger", "/docs", "9333 / 8080", "SeaweedFS FID"]:
                 self.assertNotIn(leaked, body, f"Leaked technical term '{leaked}' found in {route}")
 
-    def test_12_greenbone_and_nessus_honest_readiness_normalization(self):
-        norm = GreenboneCollector.normalize_readiness((False, {"errors": ["Socket down"]}))
-        self.assertIsInstance(norm, dict)
-        self.assertFalse(norm["ready"])
-        self.assertEqual(norm["errors"], ["Socket down"])
+    def test_12_nuclei_and_nessus_honest_readiness_normalization(self):
+        nuc_ready = NucleiCollector().check_readiness()
+        self.assertIsInstance(nuc_ready, dict)
+        self.assertIn("ready", nuc_ready)
+        self.assertIn("templates_count", nuc_ready)
+        self.assertIn("profiles", nuc_ready)
 
         with patch("src.services.scan_options_service.NessusCollector.test_connection", return_value={
             "connected": True,

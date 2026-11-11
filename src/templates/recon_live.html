@@ -123,7 +123,7 @@
       <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">External Engines</div>
       <div class="mt-1.5 space-y-1 text-[11px]">
         {% set nessus_ok = (nessus_status is mapping and nessus_status.get('connected') and nessus_status.get('scan_api_enabled', true)) or (nessus_status|string|upper in ['ONLINE', 'READY', 'CONNECTED', 'OPERATIONAL']) %}
-        {% set gb_ok = (greenbone_status is mapping and greenbone_status.get('ready')) or (greenbone_status|string|upper in ['ONLINE', 'READY', 'CONNECTED', 'OPERATIONAL']) %}
+        {% set nuclei_ok = (nuclei_status is mapping and nuclei_status.get('ready')) or (nuclei_status|string|upper in ['ONLINE', 'READY', 'CONNECTED', 'OPERATIONAL']) %}
         <div class="flex items-center justify-between">
           <span class="text-slate-600">Tenable Nessus:</span>
           <span class="font-bold {% if nessus_ok %}text-emerald-700{% else %}text-amber-700{% endif %}">
@@ -131,9 +131,9 @@
           </span>
         </div>
         <div class="flex items-center justify-between">
-          <span class="text-slate-600">Greenbone:</span>
-          <span class="font-bold {% if gb_ok %}text-emerald-700{% else %}text-amber-700{% endif %}">
-            {{ 'Operational' if gb_ok else (greenbone_status if greenbone_status is string else 'Unavailable') }}
+          <span class="text-slate-600">ProjectDiscovery Nuclei:</span>
+          <span class="font-bold {% if nuclei_ok %}text-emerald-700{% else %}text-amber-700{% endif %}">
+            {{ 'Operational' if nuclei_ok else (nuclei_status if nuclei_status is string else 'Unavailable') }}
           </span>
         </div>
       </div>

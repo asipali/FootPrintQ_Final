@@ -10,7 +10,8 @@ from fastapi import APIRouter
 from src.db.session import check_db_health
 from src.storage.seaweedfs_client import SeaweedFSClient
 from src.collectors.nessus_collector import NessusCollector
-from src.collectors.greenbone_collector import GreenboneCollector
+from src.collectors.nuclei_collector import NucleiCollector
+from src.services.graph_intelligence_service import GraphIntelligenceService
 
 router = APIRouter(prefix="/api/v1/health", tags=["Health & Diagnostics"])
 
@@ -57,32 +58,27 @@ def get_system_health():
         "capabilities": ["SYN", "TCP", "UDP", "NSE", "Service Detection", "OS Detection"]
     }
 
-    # 4. Greenbone / OpenVAS Health (Probe socket & GMP readiness without exposing socket paths)
-    gvmd_sock = "/run/gvmd/gvmd.sock"
-    socket_exists = os.path.exists(gvmd_sock)
-
-    gb_status_label = "UNAVAILABLE"
-    if socket_exists:
-        try:
-            gb_col = GreenboneCollector()
-            readiness = GreenboneCollector.normalize_readiness(gb_col.check_readiness())
-            if readiness.get("ready"):
-                gb_status_label = "ONLINE"
-            elif (readiness.get("checks") or {}).get("connected"):
-                gb_status_label = "FEED_SYNCING"
-            else:
-                gb_status_label = "INITIALIZING"
-        except Exception:
-            gb_status_label = "INITIALIZING"
-
-    greenbone_status = {
-        "status": gb_status_label
+    # 4. ProjectDiscovery Nuclei Health (sanitized: omit internal binary/template paths)
+    nuclei_info = NucleiCollector().check_readiness()
+    nuclei_status = {
+        "status": "ONLINE" if nuclei_info.get("ready") else "UNAVAILABLE",
+        "version": nuclei_info.get("version"),
+        "templates_count": nuclei_info.get("templates_count", 0),
+        "profiles_count": len(nuclei_info.get("profiles") or []),
     }
 
     # 5. Nessus Scanner Health (sanitized: omit internal URL)
     nessus_collector = NessusCollector()
     nessus_status = nessus_collector.check_status()
     nessus_status.pop("server_url", None)
+
+    # 6. Native Entity Graph / Maltego Interchange Readiness
+    graph_rt = GraphIntelligenceService.get_maltego_runtime_status()
+    maltego_graph_status = {
+        "status": "ONLINE",
+        "mode": graph_rt.get("mode"),
+        "maltego_desktop_installed": graph_rt.get("maltego_desktop_installed", False),
+    }
 
     # Overall system state
     all_ready = (
@@ -98,8 +94,9 @@ def get_system_health():
         "object_storage": {"status": seaweed_status.get("status", "UNKNOWN")},
         "network_scanner": nmap_status,
         "vulnerability_scanners": {
-            "greenbone_openvas": greenbone_status,
-            "nessus": nessus_status
-        }
+            "nuclei": nuclei_status,
+            "nessus": nessus_status,
+        },
+        "graph_intelligence": maltego_graph_status,
     }
 

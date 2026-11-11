@@ -137,6 +137,10 @@
               class="px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition">
         Technical &amp; Remediation
       </button>
+      <button type="button" id="btnModeGraph" onclick="switchResultsMode('graph')"
+              class="px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition">
+        Entity Graph &amp; Maltego
+      </button>
     </div>
     <div class="text-xs text-slate-500">
       Reports generated: <span class="font-bold text-slate-800">{{ reports|length }}</span> scoped deliverable(s)
@@ -263,6 +267,22 @@
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Tenable Nessus Read-Only Inspection & Import -->
+    <div id="nessusInspectionCard" class="fiq-card p-6 space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="text-sm font-bold text-slate-900">Tenable Nessus Read-Only Scan Inspection &amp; Import</h2>
+          <p class="text-[11px] text-slate-500">Inspect existing Nessus scans, preview results, export reports, or import completed scan findings into this campaign. License launch limits are reported honestly.</p>
+        </div>
+        <button type="button" onclick="loadNessusScansPanel(true)"
+                class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition">
+          Load Nessus Scans
+        </button>
+      </div>
+      <div id="nessusCapsSummary" class="text-[11px] text-slate-500">Click "Load Nessus Scans" to query live Nessus capabilities and existing scans.</div>
+      <div id="nessusScansContainer" class="hidden space-y-2"></div>
     </div>
 
     <!-- Passive Intelligence Results -->
@@ -528,6 +548,191 @@
       </div>
     </div>
   </section>
+
+  <!-- =================================================================== -->
+  <!-- SECTION 3: ENTITY GRAPH & MALTEGO INTERCHANGE                        -->
+  <!-- =================================================================== -->
+  <section id="viewGraphSection" class="hidden space-y-6">
+    <div class="fiq-card p-6 space-y-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-bold text-slate-900">Investigation Entity &amp; Relationship Graph</h2>
+            <span id="graphRuntimeBadge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">Loading...</span>
+          </div>
+          <p id="graphRuntimeNote" class="text-[11px] text-slate-500 mt-0.5">Correlates passive OSINT, active Nmap services, vulnerability findings, and Maltego-compatible entities.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          {% if not is_admin %}
+          <button type="button" onclick="rebuildInvestigationGraph()"
+                  class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold transition">
+            Rebuild from Evidence
+          </button>
+          {% endif %}
+          <a href="/api/v1/investigations/{{ recon_id }}/graph/export?fmt=graphml"
+             class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold transition">
+            Export GraphML (Maltego)
+          </a>
+          <a href="/api/v1/investigations/{{ recon_id }}/graph/export?fmt=csv"
+             class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition">
+            Export CSV
+          </a>
+          <a href="/api/v1/investigations/{{ recon_id }}/graph/export?fmt=json"
+             class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition">
+            Export JSON
+          </a>
+        </div>
+      </div>
+
+      <div id="graphActionFeedback" class="hidden"></div>
+
+      <!-- Metrics Strip -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
+          <div class="text-[10px] font-bold text-slate-400 uppercase">Total Entities</div>
+          <div id="graphNodeCount" class="text-lg font-extrabold text-slate-900 mt-0.5">0</div>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
+          <div class="text-[10px] font-bold text-slate-400 uppercase">Relationships</div>
+          <div id="graphEdgeCount" class="text-lg font-extrabold text-slate-900 mt-0.5">0</div>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
+          <div class="text-[10px] font-bold text-slate-400 uppercase">Clusters</div>
+          <div id="graphCompCount" class="text-lg font-extrabold text-slate-900 mt-0.5">0</div>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
+          <div class="text-[10px] font-bold text-slate-400 uppercase">Entity Filter</div>
+          <select id="graphTypeFilter" onchange="renderInvestigationGraph()" class="mt-1 w-full text-[11px] px-2 py-1 border border-slate-300 rounded bg-white">
+            <option value="">All Entity Types</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Interactive SVG Topology + Inspector -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-slate-950 p-3 overflow-auto">
+          <svg id="graphSvgCanvas" viewBox="0 0 900 520" class="w-full min-w-[680px] h-[440px]" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+        <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
+          <div class="font-bold text-slate-900 border-b border-slate-200 pb-2">Selected Entity &amp; Attribution</div>
+          <div id="graphNodeInspector" class="text-[11px] text-slate-600 space-y-1.5">
+            Click any node in the topology canvas or entity table to inspect its Maltego type, source collector, confidence, and evidence reference.
+          </div>
+          <div class="pt-2 border-t border-slate-200">
+            <div class="text-[10px] font-bold text-slate-500 uppercase mb-1">Source Provenance Breakdown</div>
+            <div id="graphSourceBreakdown" class="space-y-1 text-[11px] text-slate-700"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% if not is_admin %}
+    <!-- Manual Entity / Relationship & Maltego File Import Controls -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Add Entity -->
+      <div class="fiq-card p-5 space-y-3 text-xs">
+        <h3 class="text-xs font-bold text-slate-900 uppercase tracking-wider">Add Entity Node</h3>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Entity Type (Maltego Compatible)</label>
+          <select id="addEntType" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white">
+            <option value="domain">Domain (maltego.Domain)</option>
+            <option value="subdomain">Subdomain (maltego.DNSName)</option>
+            <option value="ip">IPv4 Address (maltego.IPv4Address)</option>
+            <option value="email">Email (maltego.EmailAddress)</option>
+            <option value="organization">Organization (maltego.Company)</option>
+            <option value="person">Person (maltego.Person)</option>
+            <option value="service">Service (maltego.Service)</option>
+            <option value="url">URL (maltego.URL)</option>
+            <option value="nameserver">Nameserver (maltego.NSRecord)</option>
+            <option value="mx">MX Record (maltego.MXRecord)</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Entity Value *</label>
+          <input id="addEntValue" type="text" placeholder="e.g. api.example.com or 10.0.0.5"
+                 class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Evidence / Source Reference</label>
+          <input id="addEntEvidence" type="text" placeholder="e.g. OSINT note or ticket ref"
+                 class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Link to Existing Node (Optional)</label>
+          <select id="addEntLinkSelect" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white">
+            <option value="">None</option>
+          </select>
+        </div>
+        <button type="button" onclick="submitAddEntity()" class="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold transition">
+          Add Entity to Graph
+        </button>
+      </div>
+
+      <!-- Add Relationship -->
+      <div class="fiq-card p-5 space-y-3 text-xs">
+        <h3 class="text-xs font-bold text-slate-900 uppercase tracking-wider">Link Entities (Relationship)</h3>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Source Entity</label>
+          <select id="addRelSource" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"></select>
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Relationship Type</label>
+          <input id="addRelType" type="text" value="RELATED_TO" placeholder="e.g. RESOLVES_TO, OWNED_BY"
+                 class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg">
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Target Entity</label>
+          <select id="addRelTarget" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"></select>
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-600 mb-1">Evidence Note</label>
+          <input id="addRelEvidence" type="text" placeholder="Correlation justification"
+                 class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg">
+        </div>
+        <button type="button" onclick="submitAddRelationship()" class="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition">
+          Create Relationship Edge
+        </button>
+      </div>
+
+      <!-- Import Maltego File -->
+      <div class="fiq-card p-5 space-y-3 text-xs">
+        <h3 class="text-xs font-bold text-slate-900 uppercase tracking-wider">Import Maltego GraphML / CSV / JSON</h3>
+        <p class="text-[11px] text-slate-500">Imports Maltego GraphML exports, entity CSV tables, or FootprintIQ graph JSON files into this investigation and archives the source file into SeaweedFS evidence.</p>
+        <input id="graphImportFile" type="file" accept=".graphml,.xml,.csv,.json"
+               class="w-full text-[11px] file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-100 file:text-slate-700 file:font-semibold">
+        <button type="button" onclick="submitGraphImport()" class="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold transition">
+          Import &amp; Correlate File
+        </button>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Entities & Relationships Tabular Directory -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="fiq-card p-5 space-y-3">
+        <h3 class="text-xs font-bold text-slate-900 uppercase tracking-wider">Entities Directory</h3>
+        <div class="overflow-x-auto max-h-72 overflow-y-auto">
+          <table class="fiq-table">
+            <thead>
+              <tr><th>Type</th><th>Value</th><th>Source</th><th>Maltego Type</th></tr>
+            </thead>
+            <tbody id="graphEntitiesTbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="fiq-card p-5 space-y-3">
+        <h3 class="text-xs font-bold text-slate-900 uppercase tracking-wider">Relationship Edges</h3>
+        <div class="overflow-x-auto max-h-72 overflow-y-auto">
+          <table class="fiq-table">
+            <thead>
+              <tr><th>Source</th><th>Relationship</th><th>Target</th><th>Confidence</th></tr>
+            </thead>
+            <tbody id="graphEdgesTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
 </div>
 
 <!-- Remediation Modal -->
@@ -575,15 +780,24 @@ function esc(v) {
 function switchResultsMode(mode) {
   const execSec = document.getElementById('viewExecSection');
   const techSec = document.getElementById('viewTechSection');
+  const graphSec = document.getElementById('viewGraphSection');
   const bExec = document.getElementById('btnModeExec');
   const bTech = document.getElementById('btnModeTech');
+  const bGraph = document.getElementById('btnModeGraph');
 
-  execSec.classList.toggle('hidden', mode !== 'exec');
-  techSec.classList.toggle('hidden', mode !== 'tech');
-  bExec.className = 'px-4 py-2 rounded-lg text-xs font-bold transition ' +
+  if (execSec) execSec.classList.toggle('hidden', mode !== 'exec');
+  if (techSec) techSec.classList.toggle('hidden', mode !== 'tech');
+  if (graphSec) graphSec.classList.toggle('hidden', mode !== 'graph');
+  if (bExec) bExec.className = 'px-4 py-2 rounded-lg text-xs font-bold transition ' +
     (mode === 'exec' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50');
-  bTech.className = 'px-4 py-2 rounded-lg text-xs font-bold transition ' +
+  if (bTech) bTech.className = 'px-4 py-2 rounded-lg text-xs font-bold transition ' +
     (mode === 'tech' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50');
+  if (bGraph) bGraph.className = 'px-4 py-2 rounded-lg text-xs font-bold transition ' +
+    (mode === 'graph' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50');
+
+  if (mode === 'graph' && !GRAPH_DATA_CACHE) {
+    loadInvestigationGraph();
+  }
 }
 
 function filterTechFindings() {
@@ -674,6 +888,338 @@ async function submitRemediationUpdate() {
     window.location.reload();
   } else {
     FIQ_Alert('resultsActionFeedback', data.detail || 'Could not update finding status.', 'error');
+  }
+}
+
+// ============================================================================
+// ENTITY GRAPH & MALTEGO INTERCHANGE
+// ============================================================================
+let GRAPH_DATA_CACHE = null;
+
+async function loadInvestigationGraph() {
+  try {
+    const res = await fetch(`/api/v1/investigations/${encodeURIComponent(RECON_ID)}/graph`);
+    const data = await res.json();
+    if (!res.ok) {
+      FIQ_Alert('graphActionFeedback', data.detail || 'Failed to load entity graph.', 'error');
+      return;
+    }
+    GRAPH_DATA_CACHE = data;
+    populateGraphFilterAndSelects(data);
+    renderInvestigationGraph();
+  } catch (err) {
+    FIQ_Alert('graphActionFeedback', 'Error loading entity graph: ' + err.message, 'error');
+  }
+}
+
+async function rebuildInvestigationGraph() {
+  FIQ_Alert('graphActionFeedback', 'Rebuilding investigation entity graph from campaign evidence...', 'loading');
+  try {
+    const res = await fetch(`/api/v1/investigations/${encodeURIComponent(RECON_ID)}/graph/rebuild`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      FIQ_Alert('graphActionFeedback', data.detail || 'Rebuild failed.', 'error');
+      return;
+    }
+    GRAPH_DATA_CACHE = data;
+    populateGraphFilterAndSelects(data);
+    renderInvestigationGraph();
+    FIQ_Alert('graphActionFeedback', `Graph synchronized: ${data.metrics?.node_count || 0} entities, ${data.metrics?.edge_count || 0} relationships.`, 'success');
+  } catch (err) {
+    FIQ_Alert('graphActionFeedback', 'Error rebuilding graph: ' + err.message, 'error');
+  }
+}
+
+function populateGraphFilterAndSelects(data) {
+  const nodes = data.nodes || [];
+  const typeSel = document.getElementById('graphTypeFilter');
+  if (typeSel) {
+    const prev = typeSel.value;
+    const types = Array.from(new Set(nodes.map(n => n.entity_type || n.type || 'domain'))).sort();
+    typeSel.innerHTML = '<option value="">All Entity Types</option>' +
+      types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    typeSel.value = types.includes(prev) ? prev : '';
+  }
+
+  ['addEntLinkSelect', 'addRelSource', 'addRelTarget'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const head = id === 'addEntLinkSelect' ? '<option value="">None</option>' : '';
+    el.innerHTML = head + nodes.map(n =>
+      `<option value="${esc(n.id)}">[${esc(n.entity_type || n.type)}] ${esc(n.label || n.value)}</option>`
+    ).join('');
+  });
+}
+
+function renderInvestigationGraph() {
+  const data = GRAPH_DATA_CACHE;
+  if (!data) return;
+
+  const mal = data.maltego_integration || {};
+  const badge = document.getElementById('graphRuntimeBadge');
+  const note = document.getElementById('graphRuntimeNote');
+  if (badge) {
+    badge.textContent = mal.maltego_desktop_installed
+      ? 'Maltego Desktop + Interchange Ready'
+      : (mal.mode || 'Native Correlation + Maltego GraphML/CSV');
+    badge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold ' +
+      (mal.maltego_desktop_installed ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800');
+  }
+  if (note && (mal.honesty_note || mal.mode)) note.textContent = mal.honesty_note || mal.mode;
+
+  document.getElementById('graphNodeCount').textContent = data.metrics?.node_count ?? (data.nodes || []).length;
+  document.getElementById('graphEdgeCount').textContent = data.metrics?.edge_count ?? (data.edges || []).length;
+  document.getElementById('graphCompCount').textContent = data.metrics?.component_count ?? (data.components || []).length;
+
+  const sb = document.getElementById('graphSourceBreakdown');
+  if (sb) {
+    const entries = Object.entries(data.source_breakdown || {});
+    sb.innerHTML = entries.length
+      ? entries.map(([k, v]) => `<div class="flex justify-between"><span class="mono text-slate-600">${esc(k)}</span><span class="font-bold text-slate-900">${esc(v)}</span></div>`).join('')
+      : '<span class="text-slate-400">No sources recorded.</span>';
+  }
+
+  const filterType = document.getElementById('graphTypeFilter')?.value || '';
+  const allNodes = data.nodes || [];
+  const nodes = filterType ? allNodes.filter(n => (n.entity_type || n.type) === filterType) : allNodes;
+  const visibleIds = new Set(nodes.map(n => n.id));
+  const edges = (data.edges || []).filter(e => visibleIds.has(e.source) && visibleIds.has(e.target));
+  const nodeMap = Object.fromEntries(allNodes.map(n => [n.id, n]));
+
+  // Render Entities & Edges Tables
+  const entBody = document.getElementById('graphEntitiesTbody');
+  if (entBody) {
+    entBody.innerHTML = nodes.length ? nodes.map(n => `
+      <tr class="cursor-pointer hover:bg-slate-50" onclick="inspectGraphNode('${esc(n.id)}')">
+        <td><span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold text-[10px] uppercase">${esc(n.entity_type || n.type)}</span></td>
+        <td class="mono text-xs text-slate-900 break-all">${esc(n.label || n.value)}</td>
+        <td class="text-[11px] text-slate-600">${esc(n.source_tool)}</td>
+        <td class="mono text-[10px] text-slate-500">${esc(n.maltego_type)}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="text-center text-xs text-slate-400 py-4">No entities match this filter.</td></tr>';
+  }
+
+  const edgeBody = document.getElementById('graphEdgesTbody');
+  if (edgeBody) {
+    edgeBody.innerHTML = edges.length ? edges.map(e => `
+      <tr>
+        <td class="mono text-[11px] text-slate-800">${esc(nodeMap[e.source]?.label || e.source)}</td>
+        <td><span class="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-bold text-[10px]">${esc(e.relationship)}</span></td>
+        <td class="mono text-[11px] text-slate-800">${esc(nodeMap[e.target]?.label || e.target)}</td>
+        <td class="text-[11px] text-slate-600">${esc(Math.round((e.confidence || 0.8) * 100))}%</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="text-center text-xs text-slate-400 py-4">No edges match this filter.</td></tr>';
+  }
+
+  // Deterministic Layered SVG Rendering
+  const svg = document.getElementById('graphSvgCanvas');
+  if (!svg) return;
+  const displayNodes = nodes.slice(0, 60);
+  const displayIds = new Set(displayNodes.map(n => n.id));
+  const laneOrder = ['organization', 'domain', 'subdomain', 'nameserver', 'mx', 'email', 'person', 'ip', 'ipv6', 'service', 'url', 'vulnerability'];
+  const colorMap = {
+    domain: '#38bdf8', subdomain: '#0ea5e9', ip: '#34d399', ipv6: '#10b981',
+    service: '#fbbf24', vulnerability: '#f43f5e', email: '#a78bfa',
+    organization: '#c084fc', person: '#e879f9', nameserver: '#2dd4bf', mx: '#818cf8', url: '#fb923c'
+  };
+
+  const groups = {};
+  displayNodes.forEach(n => {
+    const t = n.entity_type || n.type || 'domain';
+    if (!groups[t]) groups[t] = [];
+    groups[t].push(n);
+  });
+  const activeLanes = laneOrder.filter(t => groups[t] && groups[t].length);
+  Object.keys(groups).forEach(t => { if (!activeLanes.includes(t)) activeLanes.push(t); });
+
+  const W = 900, H = 520;
+  const coords = {};
+  activeLanes.forEach((lane, lIdx) => {
+    const colX = activeLanes.length === 1 ? W / 2 : 90 + (lIdx * (W - 180) / (activeLanes.length - 1));
+    const arr = groups[lane];
+    arr.forEach((n, i) => {
+      const y = arr.length === 1 ? H / 2 : 55 + (i * (H - 100) / (arr.length - 1));
+      coords[n.id] = { x: colX, y };
+    });
+  });
+
+  let htmlParts = [];
+  edges.filter(e => displayIds.has(e.source) && displayIds.has(e.target)).forEach(e => {
+    const p1 = coords[e.source], p2 = coords[e.target];
+    if (!p1 || !p2) return;
+    htmlParts.push(`<line x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" stroke="#475569" stroke-width="1.4" stroke-opacity="0.7" />`);
+  });
+
+  displayNodes.forEach(n => {
+    const pos = coords[n.id];
+    if (!pos) return;
+    const t = n.entity_type || n.type || 'domain';
+    const fill = colorMap[t] || '#94a3b8';
+    const shortLbl = String(n.label || n.value || n.id).slice(0, 22);
+    htmlParts.push(`
+      <g style="cursor:pointer" onclick="inspectGraphNode('${esc(n.id)}')">
+        <circle cx="${pos.x.toFixed(1)}" cy="${pos.y.toFixed(1)}" r="11" fill="${fill}" stroke="#0f172a" stroke-width="2" />
+        <text x="${pos.x.toFixed(1)}" y="${(pos.y + 22).toFixed(1)}" text-anchor="middle" fill="#e2e8f0" font-size="10" font-family="monospace">${esc(shortLbl)}</text>
+      </g>`);
+  });
+
+  if (!displayNodes.length) {
+    htmlParts.push('<text x="450" y="260" text-anchor="middle" fill="#94a3b8" font-size="13">No entities present yet. Run scans or add an entity below.</text>');
+  }
+  svg.innerHTML = htmlParts.join('');
+}
+
+function inspectGraphNode(nodeId) {
+  if (!GRAPH_DATA_CACHE) return;
+  const node = (GRAPH_DATA_CACHE.nodes || []).find(n => n.id === nodeId);
+  const box = document.getElementById('graphNodeInspector');
+  if (!node || !box) return;
+  box.innerHTML = `
+    <div><span class="font-bold text-slate-800">Label:</span> <span class="mono break-all">${esc(node.label || node.value)}</span></div>
+    <div><span class="font-bold text-slate-800">Type:</span> ${esc(node.entity_type || node.type)} (<span class="mono">${esc(node.maltego_type)}</span>)</div>
+    <div><span class="font-bold text-slate-800">Source Tool:</span> ${esc(node.source_tool)}</div>
+    <div><span class="font-bold text-slate-800">Risk Level:</span> ${esc(node.risk_level || 'info')}</div>
+    <div><span class="font-bold text-slate-800">Confidence:</span> ${esc(Math.round((node.confidence || 0.85) * 100))}%</div>
+    <div><span class="font-bold text-slate-800">Evidence Ref:</span> <span class="mono break-all">${esc(node.evidence_ref || 'Derived from campaign bundle')}</span></div>`;
+}
+
+async function submitAddEntity() {
+  const payload = {
+    entity_type: document.getElementById('addEntType').value,
+    value: document.getElementById('addEntValue').value.trim(),
+    evidence_ref: document.getElementById('addEntEvidence').value.trim() || null,
+    link_to_node_id: document.getElementById('addEntLinkSelect').value || null,
+  };
+  if (!payload.value) {
+    FIQ_Alert('graphActionFeedback', 'Entity value is required.', 'error');
+    return;
+  }
+  const res = await fetch(`/api/v1/investigations/${encodeURIComponent(RECON_ID)}/graph/entities`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    FIQ_Alert('graphActionFeedback', data.detail || 'Failed to add entity.', 'error');
+    return;
+  }
+  document.getElementById('addEntValue').value = '';
+  GRAPH_DATA_CACHE = data.graph || data;
+  populateGraphFilterAndSelects(GRAPH_DATA_CACHE);
+  renderInvestigationGraph();
+  FIQ_Alert('graphActionFeedback', 'Entity added and persisted to investigation graph.', 'success');
+}
+
+async function submitAddRelationship() {
+  const payload = {
+    source_node_id: document.getElementById('addRelSource').value,
+    target_node_id: document.getElementById('addRelTarget').value,
+    relationship_type: document.getElementById('addRelType').value.trim() || 'RELATED_TO',
+    evidence_ref: document.getElementById('addRelEvidence').value.trim() || null,
+  };
+  if (!payload.source_node_id || !payload.target_node_id) {
+    FIQ_Alert('graphActionFeedback', 'Both source and target entities are required.', 'error');
+    return;
+  }
+  const res = await fetch(`/api/v1/investigations/${encodeURIComponent(RECON_ID)}/graph/relationships`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    FIQ_Alert('graphActionFeedback', data.detail || 'Failed to add relationship.', 'error');
+    return;
+  }
+  GRAPH_DATA_CACHE = data.graph || data;
+  populateGraphFilterAndSelects(GRAPH_DATA_CACHE);
+  renderInvestigationGraph();
+  FIQ_Alert('graphActionFeedback', 'Relationship edge added.', 'success');
+}
+
+async function submitGraphImport() {
+  const input = document.getElementById('graphImportFile');
+  if (!input || !input.files || !input.files.length) {
+    FIQ_Alert('graphActionFeedback', 'Select a .graphml, .csv, or .json file first.', 'error');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  FIQ_Alert('graphActionFeedback', 'Importing and validating entity file...', 'loading');
+  const res = await fetch(`/api/v1/investigations/${encodeURIComponent(RECON_ID)}/graph/import`, {
+    method: 'POST',
+    body: fd
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    FIQ_Alert('graphActionFeedback', data.detail || 'Import failed.', 'error');
+    return;
+  }
+  input.value = '';
+  GRAPH_DATA_CACHE = data.graph || data;
+  populateGraphFilterAndSelects(GRAPH_DATA_CACHE);
+  renderInvestigationGraph();
+  FIQ_Alert('graphActionFeedback', `Imported ${data.imported_entities || 0} entities and ${data.imported_relationships || 0} relationships.`, 'success');
+}
+
+// ============================================================================
+// TENABLE NESSUS READ-ONLY SCAN INSPECTION & IMPORT
+// ============================================================================
+async function loadNessusScansPanel() {
+  const summary = document.getElementById('nessusCapsSummary');
+  const box = document.getElementById('nessusScansContainer');
+  const isAdmin = {{ 'true' if is_admin else 'false' }};
+  summary.textContent = 'Querying Tenable Nessus API capabilities and existing scans...';
+  try {
+    const [capRes, scansRes] = await Promise.all([
+      fetch('/api/v1/scanners/nessus/capabilities'),
+      fetch('/api/v1/scanners/nessus/scans')
+    ]);
+    const capData = await capRes.json();
+    const scansData = await scansRes.json();
+    if (!capRes.ok || !capData.connected) {
+      summary.textContent = capData.error || 'Tenable Nessus instance is not currently reachable.';
+      return;
+    }
+    summary.textContent = `${capData.nessus_type || 'Nessus'} (${capData.version || 'Unknown'}) — Launch API: ${capData.capabilities?.scan_launch ? 'Enabled' : 'Read-Only Disabled by License'} | Scanners: ${capData.scanners_count ?? 0}`;
+    const scans = scansData.scans || [];
+    box.classList.remove('hidden');
+    if (!scans.length) {
+      box.innerHTML = '<div class="text-xs text-slate-400">No existing scans found on Nessus server.</div>';
+      return;
+    }
+    box.innerHTML = scans.map(s => `
+      <div class="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+        <div>
+          <span class="font-bold text-slate-900">${esc(s.name)}</span>
+          <span class="mono text-[10px] text-slate-500 ml-2">ID: ${esc(s.id)}</span>
+          <span class="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-700">${esc(s.status)}</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          ${!isAdmin ? `<button type="button" onclick="importNessusScan(${Number(s.id)})" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-semibold">Import Findings</button>` : ''}
+        </div>
+      </div>`).join('');
+  } catch (err) {
+    summary.textContent = 'Error querying Nessus: ' + err.message;
+  }
+}
+
+async function importNessusScan(scanId) {
+  FIQ_Alert('resultsActionFeedback', `Importing Nessus scan ${scanId} into campaign ${RECON_ID}...`, 'loading');
+  try {
+    const res = await fetch(`/api/v1/scanners/nessus/scans/${encodeURIComponent(scanId)}/import?investigation_id=${encodeURIComponent(RECON_ID)}`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      FIQ_Alert('resultsActionFeedback', data.detail || 'Nessus import failed.', 'error');
+      return;
+    }
+    FIQ_Alert('resultsActionFeedback', `Imported ${data.findings_imported || 0} findings from Nessus scan ${scanId} (status: ${data.nessus_scan_status || 'unknown'}).`, 'success');
+    if ((data.findings_imported || 0) > 0) {
+      setTimeout(() => window.location.reload(), 1200);
+    }
+  } catch (err) {
+    FIQ_Alert('resultsActionFeedback', 'Error importing Nessus scan: ' + err.message, 'error');
   }
 }
 </script>

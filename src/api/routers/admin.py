@@ -13,7 +13,6 @@ from src.db.repository import FootprintIQRepository
 from src.authorization.target_authorizer import TargetAuthorizer, TargetAuthorizationError, TargetSyntaxError
 from src.collectors.nmap_collector import NmapCollector
 from src.collectors.nessus_collector import NessusCollector
-from src.collectors.greenbone_collector import GreenboneCollector
 from src.storage.seaweedfs_client import SeaweedFSClient
 from src.services.rbac_service import record_security_audit
 
@@ -154,14 +153,18 @@ def get_admin_system_diagnostics(repo: FootprintIQRepository = Depends(get_repos
     db_ok = getattr(repo, "db", None) is not None
     storage = SeaweedFSClient().check_health()
     nmap = NmapCollector()
-    nessus = NessusCollector().test_connection()
-    greenbone = GreenboneCollector.normalize_readiness(GreenboneCollector().check_readiness())
+    nessus = NessusCollector().get_api_capabilities()
+    from src.collectors.nuclei_collector import NucleiCollector
+    nuclei = NucleiCollector().check_readiness()
+    from src.services.graph_intelligence_service import GraphIntelligenceService
+    graph_runtime = GraphIntelligenceService.get_maltego_runtime_status()
     return {
         "database": {"engine": "Microsoft SQL Server", "available": db_ok},
         "storage": storage,
         "nmap": {"version": nmap.version, "capabilities": nmap.capabilities},
         "nessus": nessus,
-        "greenbone": greenbone,
+        "nuclei": nuclei,
+        "maltego_graph": graph_runtime,
         "public_api_docs_enabled": os.getenv("ENABLE_PUBLIC_API_DOCS", "false").lower() == "true"
     }
 

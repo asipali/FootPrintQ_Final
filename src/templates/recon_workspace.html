@@ -180,7 +180,7 @@
           <div>
             <h3 class="text-sm font-bold text-slate-900 uppercase tracking-wide">Vulnerability Assessment</h3>
             <p class="text-xs text-slate-600 mt-1 leading-relaxed">
-              Multi-engine scanning with {{ nse_count }} allowlisted NSE scripts, Tenable Nessus, and Greenbone/OpenVAS.
+              Multi-engine scanning with {{ nse_count }} allowlisted NSE scripts, ProjectDiscovery Nuclei, and Tenable Nessus capabilities.
             </p>
           </div>
         </div>
@@ -517,26 +517,33 @@
         </div>
       </label>
 
-      <!-- Greenbone / OpenVAS Engine -->
-      {% set gb_avail = options_catalog.vulnerability.greenbone.available %}
-      <label class="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex items-start space-x-3 {% if not gb_avail %}opacity-70 cursor-not-allowed{% else %}cursor-pointer{% endif %}">
-        <input id="vEngineGreenbone" type="checkbox" value="greenbone"
+      <!-- ProjectDiscovery Nuclei Engine -->
+      {% set nuc = options_catalog.vulnerability.nuclei %}
+      {% set nuc_avail = nuc.available %}
+      <label class="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex items-start space-x-3 {% if not nuc_avail %}opacity-70 cursor-not-allowed{% else %}cursor-pointer{% endif %}">
+        <input id="vEngineNuclei" type="checkbox" value="nuclei"
                class="vuln-engine-check mt-0.5 rounded border-slate-300 text-rose-600"
-               {% if not gb_avail %}disabled{% endif %}
+               {% if not nuc_avail %}disabled{% endif %}
                onchange="toggleEnginePanels(); refreshReviewSummary();">
         <div class="space-y-1 text-xs">
           <div class="font-bold text-slate-900 flex items-center gap-2">
-            <span>Greenbone / OpenVAS</span>
-            <span class="px-1.5 py-0.2 rounded text-[9px] font-bold {% if gb_avail %}bg-emerald-100 text-emerald-800{% else %}bg-rose-100 text-rose-800{% endif %}">
-              {{ options_catalog.vulnerability.greenbone.status }}
+            <span>ProjectDiscovery Nuclei</span>
+            <span class="px-1.5 py-0.2 rounded text-[9px] font-bold {% if nuc_avail %}bg-emerald-100 text-emerald-800{% else %}bg-rose-100 text-rose-800{% endif %}">
+              {{ nuc.status }}
             </span>
           </div>
-          <p class="text-[11px] text-slate-500">{{ options_catalog.vulnerability.greenbone.reason or 'Greenbone feeds & manager operational.' }}</p>
+          <p class="text-[11px] text-slate-500">
+            {% if nuc_avail %}
+            Nuclei {{ nuc.version }} ready ({{ nuc.templates_count }} local templates, safe policy profiles).
+            {% else %}
+            {{ nuc.reason or 'Nuclei binary or templates unavailable.' }}
+            {% endif %}
+          </p>
         </div>
       </label>
     </div>
 
-    <!-- Nessus / Greenbone Template Selectors (shown when selected) -->
+    <!-- Nessus / Nuclei Policy & Template Selectors (shown when selected) -->
     <div id="externalEngineOptions" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4">
       {% if options_catalog.vulnerability.nessus.templates %}
       <div id="nessusTplBox" class="hidden p-4 rounded-xl bg-slate-50 border border-slate-200">
@@ -548,14 +555,42 @@
         </select>
       </div>
       {% endif %}
-      {% if options_catalog.vulnerability.greenbone.scan_configs %}
-      <div id="gbConfigBox" class="hidden p-4 rounded-xl bg-slate-50 border border-slate-200">
-        <label class="block text-xs font-bold text-slate-800 mb-1.5">Greenbone Scan Config</label>
-        <select id="gbConfigSelect" onchange="refreshReviewSummary()" class="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white">
-          {% for c in options_catalog.vulnerability.greenbone.scan_configs %}
-          <option value="{{ c.id }}">{{ c.name }}</option>
-          {% endfor %}
-        </select>
+      {% if nuc.profiles %}
+      <div id="nucleiConfigBox" class="hidden p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3 md:col-span-2">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs font-bold text-slate-800 mb-1.5">Nuclei Safe Scan Profile</label>
+            <select id="nucleiProfileSelect" onchange="refreshReviewSummary()" class="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white">
+              {% for p in nuc.profiles %}
+              <option value="{{ p.id }}" title="{{ p.description }}">{{ p.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-800 mb-1.5">Optional Safe Tags (comma-separated)</label>
+            <input id="nucleiTagsInput" type="text" placeholder="e.g. cve,headers,ssl,panel"
+                   onchange="refreshReviewSummary()"
+                   class="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-800 mb-1.5">Rate Limit (req/s, max 100)</label>
+            <input id="nucleiRateLimitInput" type="number" min="1" max="100" value="30"
+                   onchange="refreshReviewSummary()"
+                   class="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white">
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+          <div class="flex flex-wrap items-center gap-3 text-[11px]">
+            <span class="font-bold text-slate-700">Severities:</span>
+            {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+            <label class="inline-flex items-center space-x-1 cursor-pointer">
+              <input type="checkbox" value="{{ sev }}" checked class="nuclei-sev-check rounded border-slate-300 text-rose-600" onchange="refreshReviewSummary()">
+              <span class="uppercase font-semibold text-slate-700">{{ sev }}</span>
+            </label>
+            {% endfor %}
+          </div>
+          <span class="text-[10px] text-slate-500">Destructive tags (dos, fuzz, bruteforce, exploit, dast, sqli, code/headless) automatically blocked.</span>
+        </div>
       </div>
       {% endif %}
     </div>
@@ -576,6 +611,7 @@
         'ssl_tls': 'SSL / TLS Posture',
         'smb': 'SMB Signing & Dialect',
         'dns': 'DNS Service Audit',
+        'ssh_ftp': 'SSH & FTP Protocol Checks',
         'approved_vuln': 'Approved Vulnerability Checks (Non-Exploitative)'
       } %}
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -830,14 +866,14 @@ function applyActivePreset(presetId) {
 function toggleEnginePanels() {
   const nseOn = document.getElementById('vEngineNse').checked;
   const nesOn = document.getElementById('vEngineNessus').checked;
-  const gbOn = document.getElementById('vEngineGreenbone').checked;
+  const nucOn = document.getElementById('vEngineNuclei').checked;
   document.getElementById('nseScriptsBox').classList.toggle('hidden', !nseOn);
   const extBox = document.getElementById('externalEngineOptions');
-  if (extBox) extBox.classList.toggle('hidden', !(nesOn || gbOn));
+  if (extBox) extBox.classList.toggle('hidden', !(nesOn || nucOn));
   const nTpl = document.getElementById('nessusTplBox');
   if (nTpl) nTpl.classList.toggle('hidden', !nesOn);
-  const gCfg = document.getElementById('gbConfigBox');
-  if (gCfg) gCfg.classList.toggle('hidden', !gbOn);
+  const nucBox = document.getElementById('nucleiConfigBox');
+  if (nucBox) nucBox.classList.toggle('hidden', !nucOn);
 }
 
 function setAllNseScripts(checked) {
@@ -850,13 +886,17 @@ function applyVulnPreset(presetId) {
   if (!p) return;
   const engList = p.engines || (p.engine ? [p.engine] : ['nse']);
   const engSet = new Set(engList);
-  ['nse', 'nessus', 'greenbone'].forEach(en => {
+  ['nse', 'nessus', 'nuclei'].forEach(en => {
     const el = document.getElementById('vEngine' + en.charAt(0).toUpperCase() + en.slice(1));
     if (el && !el.disabled) el.checked = engSet.has(en) || p.engine === 'combined';
   });
   if (p.scripts) {
     const sSet = new Set(p.scripts);
     document.querySelectorAll('.nse-script-check').forEach(cb => { cb.checked = sSet.has(cb.value); });
+  }
+  if (p.nuclei_profile) {
+    const np = document.getElementById('nucleiProfileSelect');
+    if (np) np.value = p.nuclei_profile;
   }
   toggleEnginePanels();
   refreshReviewSummary();
@@ -913,7 +953,7 @@ function buildConfigPayload() {
     const engines = [];
     if (document.getElementById('vEngineNse').checked) engines.push('nse');
     if (document.getElementById('vEngineNessus').checked) engines.push('nessus');
-    if (document.getElementById('vEngineGreenbone').checked) engines.push('greenbone');
+    if (document.getElementById('vEngineNuclei').checked) engines.push('nuclei');
     const vulnObj = {
       engines,
       engine: engines.length > 1 ? 'combined' : (engines[0] || 'nse')
@@ -923,8 +963,16 @@ function buildConfigPayload() {
     }
     const nTpl = document.getElementById('nessusTemplateSelect');
     if (nTpl && engines.includes('nessus')) vulnObj.nessus_template_uuid = nTpl.value;
-    const gCfg = document.getElementById('gbConfigSelect');
-    if (gCfg && engines.includes('greenbone')) vulnObj.greenbone_config_id = gCfg.value;
+    if (engines.includes('nuclei')) {
+      const np = document.getElementById('nucleiProfileSelect');
+      if (np) vulnObj.nuclei_profile = np.value;
+      const sevs = Array.from(document.querySelectorAll('.nuclei-sev-check:checked')).map(c => c.value);
+      if (sevs.length) vulnObj.nuclei_severities = sevs;
+      const tagsRaw = (document.getElementById('nucleiTagsInput')?.value || '').trim();
+      if (tagsRaw) vulnObj.nuclei_tags = tagsRaw.split(',').map(s => s.trim()).filter(Boolean);
+      const rl = parseInt(document.getElementById('nucleiRateLimitInput')?.value || '30', 10);
+      vulnObj.nuclei_rate_limit = (!isNaN(rl) && rl > 0) ? Math.min(100, rl) : 30;
+    }
     cfg.vulnerability = vulnObj;
   }
 
@@ -1079,13 +1127,29 @@ document.addEventListener('DOMContentLoaded', function () {
   if (EXISTING_CFG.vulnerability) {
     const v = EXISTING_CFG.vulnerability;
     const engSet = new Set(v.engines || (v.engine ? [v.engine] : ['nse']));
-    ['nse', 'nessus', 'greenbone'].forEach(en => {
+    ['nse', 'nessus', 'nuclei'].forEach(en => {
       const el = document.getElementById('vEngine' + en.charAt(0).toUpperCase() + en.slice(1));
       if (el && !el.disabled) el.checked = engSet.has(en) || v.engine === 'combined';
     });
     if (v.nse_scripts) {
       const nSet = new Set(v.nse_scripts);
       document.querySelectorAll('.nse-script-check').forEach(cb => { cb.checked = nSet.has(cb.value); });
+    }
+    if (v.nuclei_profile) {
+      const np = document.getElementById('nucleiProfileSelect');
+      if (np) np.value = v.nuclei_profile;
+    }
+    if (Array.isArray(v.nuclei_tags)) {
+      const nt = document.getElementById('nucleiTagsInput');
+      if (nt) nt.value = v.nuclei_tags.join(',');
+    }
+    if (v.nuclei_rate_limit) {
+      const nrl = document.getElementById('nucleiRateLimitInput');
+      if (nrl) nrl.value = v.nuclei_rate_limit;
+    }
+    if (Array.isArray(v.nuclei_severities)) {
+      const sSet = new Set(v.nuclei_severities);
+      document.querySelectorAll('.nuclei-sev-check').forEach(cb => { cb.checked = sSet.has(cb.value); });
     }
     toggleEnginePanels();
   }

@@ -851,3 +851,219 @@ class NessusCollector:
             "findings": findings,
             "scanner_info": status_info
         }
+
+    def get_scanners(self) -> Dict[str, Any]:
+        """Lists configured Nessus scanners cleanly via GET /scanners."""
+        if not self.has_credentials:
+            return {
+                "available": False,
+                "scanners": [],
+                "count": 0,
+                "error": "NESSUS_ACCESS_KEY and NESSUS_SECRET_KEY are not configured.",
+            }
+        try:
+            resp = requests.get(
+                f"{self.base_url}/scanners",
+                headers=self._auth_headers(),
+                verify=self.verify_ssl,
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                scanners_raw = resp.json().get("scanners", []) or []
+                sanitized = [
+                    {
+                        "id": s.get("id"),
+                        "uuid": s.get("uuid"),
+                        "name": s.get("name"),
+                        "type": s.get("type"),
+                        "status": s.get("status"),
+                        "platform": s.get("platform"),
+                        "engine_build": s.get("engine_build"),
+                        "loaded_plugin_set": s.get("loaded_plugin_set"),
+                        "scan_count": s.get("scan_count"),
+                        "license": s.get("license"),
+                    }
+                    for s in scanners_raw
+                ]
+                return {"available": True, "scanners": sanitized, "count": len(sanitized), "error": None}
+            return {
+                "available": False,
+                "scanners": [],
+                "count": 0,
+                "error": f"Nessus /scanners returned HTTP {resp.status_code}.",
+            }
+        except Exception as exc:
+            return {"available": False, "scanners": [], "count": 0, "error": self._sanitize_error(exc)}
+
+    def list_scans(self) -> Dict[str, Any]:
+        """Lists existing Nessus scans and folders via GET /scans (read-only)."""
+        if not self.has_credentials:
+            return {
+                "available": False,
+                "scans": [],
+                "folders": [],
+                "count": 0,
+                "error": "NESSUS_ACCESS_KEY and NESSUS_SECRET_KEY are not configured.",
+            }
+        try:
+            resp = requests.get(
+                f"{self.base_url}/scans",
+                headers=self._auth_headers(),
+                verify=self.verify_ssl,
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json() or {}
+                scans_raw = data.get("scans") or []
+                folders_raw = data.get("folders") or []
+                sanitized_scans = [
+                    {
+                        "id": s.get("id"),
+                        "uuid": s.get("uuid"),
+                        "name": s.get("name"),
+                        "status": s.get("status"),
+                        "folder_id": s.get("folder_id"),
+                        "creation_date": s.get("creation_date"),
+                        "last_modification_date": s.get("last_modification_date"),
+                        "read": s.get("read"),
+                        "enabled": s.get("enabled"),
+                    }
+                    for s in scans_raw
+                ]
+                return {
+                    "available": True,
+                    "scans": sanitized_scans,
+                    "folders": [{"id": f.get("id"), "name": f.get("name"), "type": f.get("type")} for f in folders_raw],
+                    "count": len(sanitized_scans),
+                    "error": None,
+                }
+            return {
+                "available": False,
+                "scans": [],
+                "folders": [],
+                "count": 0,
+                "error": f"Nessus /scans returned HTTP {resp.status_code}.",
+            }
+        except Exception as exc:
+            return {"available": False, "scans": [], "folders": [], "count": 0, "error": self._sanitize_error(exc)}
+
+    def get_scan_details(
+        self,
+        scan_id: int,
+        target_fallback: str = "127.0.0.1",
+        investigation_id: str = "INV-READONLY",
+        scan_ref_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Retrieves read-only Nessus scan status, hosts, raw vulnerabilities, and normalized findings."""
+        if not self.has_credentials:
+            return {
+                "available": False,
+                "scan_id": scan_id,
+                "error": "NESSUS_ACCESS_KEY and NESSUS_SECRET_KEY are not configured.",
+            }
+        try:
+            resp = requests.get(
+                f"{self.base_url}/scans/{int(scan_id)}",
+                headers=self._auth_headers(),
+                verify=self.verify_ssl,
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
+                return {
+                    "available": False,
+                    "scan_id": int(scan_id),
+                    "error": f"Nessus GET /scans/{int(scan_id)} returned HTTP {resp.status_code}.",
+                }
+            data = resp.json() or {}
+            info = data.get("info") or {}
+            hosts = data.get("hosts") or []
+            raw_vulns = data.get("vulnerabilities") or []
+            effective_target = str(info.get("targets") or target_fallback).split(",")[0].strip() or target_fallback
+            normalized = self.normalize_findings(
+                {"vulnerabilities": raw_vulns},
+                target=effective_target,
+                investigation_id=investigation_id,
+                scan_id=scan_ref_id or f"NESSUS-{scan_id}",
+            )
+            return {
+                "available": True,
+                "scan_id": int(scan_id),
+                "name": info.get("name"),
+                "status": info.get("status"),
+                "targets": info.get("targets"),
+                "policy": info.get("policy"),
+                "scan_start": info.get("scan_start"),
+                "scan_end": info.get("scan_end"),
+                "host_count": info.get("hostcount", len(hosts)),
+                "hosts": [
+                    {
+                        "host_id": h.get("host_id"),
+                        "hostname": h.get("hostname"),
+                        "host_ip": h.get("host_ip"),
+                        "critical": h.get("critical", 0),
+                        "high": h.get("high", 0),
+                        "medium": h.get("medium", 0),
+                        "low": h.get("low", 0),
+                        "info": h.get("info", 0),
+                    }
+                    for h in hosts
+                ],
+                "raw_vulnerabilities_count": len(raw_vulns),
+                "normalized_findings": normalized,
+                "error": None,
+            }
+        except Exception as exc:
+            return {"available": False, "scan_id": int(scan_id), "error": self._sanitize_error(exc)}
+
+    def get_api_capabilities(self) -> Dict[str, Any]:
+        """Audits live Nessus API capabilities without fabricating unsupported features."""
+        conn = self.test_connection()
+        if not conn.get("connected"):
+            return {
+                "connected": False,
+                "authenticated": bool(conn.get("authenticated")),
+                "status": conn.get("status", "Unavailable"),
+                "nessus_type": conn.get("nessus_type"),
+                "version": conn.get("version"),
+                "capabilities": {
+                    "connectivity": False,
+                    "authentication": bool(conn.get("authenticated")),
+                    "scanner_info": False,
+                    "templates_listing": False,
+                    "scan_listing": False,
+                    "scan_status_and_results": False,
+                    "report_export": False,
+                    "scan_launch": False,
+                },
+                "read_only": True,
+                "error": conn.get("error"),
+            }
+
+        scanners_res = self.get_scanners()
+        scans_res = self.list_scans()
+        templates = self.get_scan_templates(refresh=True)
+        features = conn.get("license_features") or {}
+        scan_api = bool(conn.get("scan_api_enabled"))
+
+        return {
+            "connected": True,
+            "authenticated": True,
+            "status": "Operational" if scan_api else "Connected (Read-Only)",
+            "nessus_type": conn.get("nessus_type"),
+            "version": conn.get("version"),
+            "capabilities": {
+                "connectivity": True,
+                "authentication": True,
+                "scanner_info": bool(scanners_res.get("available")),
+                "templates_listing": len(templates) > 0,
+                "scan_listing": bool(scans_res.get("available")),
+                "scan_status_and_results": bool(scans_res.get("available")),
+                "report_export": bool(features.get("report", True)),
+                "scan_launch": scan_api,
+            },
+            "scanners_count": scanners_res.get("count", 0),
+            "existing_scans_count": scans_res.get("count", 0),
+            "templates_count": len(templates),
+            "read_only": not scan_api,
+            "limitations": conn.get("limitations"),
+        }

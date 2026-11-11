@@ -1625,16 +1625,16 @@ class FootprintIQRepository:
             },
             {
                 "name": "Vulnerability Assessment",
-                "description": "Policy-governed NSE vulnerability scripts and Greenbone/OpenVAS evaluation",
+                "description": "Policy-governed Nmap NSE scripts and ProjectDiscovery Nuclei safe evaluation",
                 "category": "vulnerability",
-                "config_json": '{"scan_types": ["nmap_nse", "greenbone", "nessus"], "service_detection": true}',
+                "config_json": '{"scan_types": ["nmap_nse", "nuclei"], "nuclei_profile": "safe-all", "service_detection": true}',
                 "is_builtin": True
             },
             {
                 "name": "Full Recon",
-                "description": "End-to-end multi-engine assessment: Passive OSINT + Nmap Services + NSE + Greenbone + Nessus",
+                "description": "End-to-end multi-engine assessment: Passive OSINT + Nmap Services + NSE + Nuclei",
                 "category": "combined",
-                "config_json": '{"scan_types": ["combined"], "service_detection": true, "os_detection": true}',
+                "config_json": '{"scan_types": ["combined"], "nuclei_profile": "safe-all", "service_detection": true, "os_detection": true}',
                 "is_builtin": True
             },
             {
@@ -1653,9 +1653,9 @@ class FootprintIQRepository:
             },
             {
                 "name": "lab-comprehensive-vuln",
-                "description": "Full vulnerability discovery via Nmap NSE, Nessus & Greenbone",
+                "description": "Full vulnerability discovery via Nmap NSE & ProjectDiscovery Nuclei",
                 "category": "vulnerability",
-                "config_json": '{"ports": "1-65535", "timing": "T3", "scripts": "vuln", "scanners": ["nmap", "nessus", "greenbone"]}',
+                "config_json": '{"ports": "1-65535", "timing": "T3", "scripts": "vuln", "scanners": ["nmap", "nuclei"]}',
                 "is_builtin": True
             }
         ]

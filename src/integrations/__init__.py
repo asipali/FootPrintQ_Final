@@ -1,23 +1,8 @@
 """
 OSINT-RECON Integrations Package
-Exports Greenbone GMP client and authentication configuration modules.
+Retains extension namespace for authorized external security integrations.
+(Active Greenbone/OpenVAS connectors removed; historical XML records remain readable
+through src.parsers.greenbone_parser and persisted MSSQL findings/evidence.)
 """
 
-from src.integrations.greenbone_auth import GreenboneAuthConfig
-from src.integrations.greenbone_client import (
-    GreenboneClient,
-    GreenboneClientError,
-    GreenboneConnectionError,
-    GreenboneAuthError,
-    GreenboneReadinessError
-)
-
-__all__ = [
-    "GreenboneAuthConfig",
-    "GreenboneClient",
-    "GreenboneClientError",
-    "GreenboneConnectionError",
-    "GreenboneAuthError",
-    "GreenboneReadinessError",
-]
-
+__all__: list[str] = []

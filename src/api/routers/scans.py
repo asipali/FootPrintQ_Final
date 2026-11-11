@@ -27,11 +27,14 @@ class LaunchScanRequest(BaseModel):
     scan_type: str = Field(
         ...,
         example="combined",
-        description="One of: 'passive', 'network_discovery', 'nmap_services', 'nmap_nse', 'greenbone', 'nessus', 'combined'"
+        description="One of: 'passive', 'network_discovery', 'nmap_services', 'nmap_nse', 'nuclei', 'nessus', 'combined'"
     )
     target: str = Field(..., example="192.0.2.10")
     profile: Optional[str] = Field("lab-basic", example="lab-basic")
     custom_scripts: Optional[List[str]] = Field(None, example=["ftp-vsftpd-backdoor", "http-title"])
+    nuclei_profile: Optional[str] = Field("http-security", example="http-security")
+    nuclei_tags: Optional[List[str]] = Field(None)
+    nuclei_severities: Optional[List[str]] = Field(None)
 
 
 @router.post("", status_code=status.HTTP_200_OK)
@@ -42,6 +45,12 @@ def launch_scan(
     current_user: Dict[str, Any] = Depends(require_investigator),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
+    if (req.scan_type or "").strip().lower() == "greenbone":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Active Greenbone/OpenVAS execution has been deprecated and removed. Use 'nuclei' or 'nmap_nse' for vulnerability scanning (historical Greenbone findings remain preserved)."
+        )
+
     enforce_investigation_access(
         repo,
         current_user,
@@ -53,7 +62,7 @@ def launch_scan(
     orchestrator = UnifiedScanOrchestrator(repo=repo)
 
     # 1. Global target authorization & syntax safety check (Fail-closed upfront)
-    if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "greenbone", "nessus", "combined"):
+    if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "nuclei", "nessus", "combined"):
         try:
             auth_rec = orchestrator.authorizer.authorize_target(
                 req.target,
@@ -72,7 +81,7 @@ def launch_scan(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
     # 2. Verify target is registered under this specific investigation
-    if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "greenbone", "nessus", "combined"):
+    if req.scan_type in ("network_discovery", "nmap_services", "nmap_nse", "nuclei", "nessus", "combined"):
         try:
             orchestrator.authorizer.authorize_target(
                 req.target,
@@ -89,7 +98,10 @@ def launch_scan(
             scan_type=req.scan_type,
             target=req.target,
             profile=req.profile or "default",
-            custom_scripts=req.custom_scripts
+            custom_scripts=req.custom_scripts,
+            nuclei_profile=req.nuclei_profile,
+            nuclei_tags=req.nuclei_tags,
+            nuclei_severities=req.nuclei_severities,
         )
         if result.get("status") == "FAILED":
             err_msg = result.get("error", "Scan execution failed")

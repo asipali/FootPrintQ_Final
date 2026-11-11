@@ -19,7 +19,7 @@
   {% set act_caps = catalog.get('active', {}).get('capabilities', {}) %}
   {% set vuln = catalog.get('vulnerability', {}) %}
   {% set nessus = vuln.get('nessus', {}) %}
-  {% set greenbone = vuln.get('greenbone', {}) %}
+  {% set nuclei = vuln.get('nuclei', {}) %}
   {% set combined = vuln.get('combined', {}) %}
 
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -48,31 +48,33 @@
       <div class="flex items-center justify-between">
         <span class="text-xs font-bold text-slate-900">Tenable Nessus</span>
         <span class="px-2 py-0.5 rounded-full text-[10px] font-bold {% if nessus.get('available') %}bg-emerald-100 text-emerald-800{% elif nessus.get('connected') %}bg-amber-100 text-amber-800{% else %}bg-rose-100 text-rose-800{% endif %}">
-          {% if nessus.get('available') %}Operational{% elif nessus.get('connected') %}Connected (Limited){% else %}Unavailable{% endif %}
+          {% if nessus.get('available') %}Operational{% elif nessus.get('connected') %}Read-Only Connected{% else %}Unavailable{% endif %}
         </span>
       </div>
       <p class="text-[11px] text-slate-500">
         {% if nessus.get('available') %}
         Connected and authenticated. {{ nessus.get('template_count', 0) }} runnable scan templates detected.
+        {% elif nessus.get('connected') %}
+        {{ nessus.get('nessus_type', 'Nessus') }} ({{ nessus.get('server_version', 'Unknown') }}) connected &amp; authenticated. Scan inspection, results retrieval &amp; import active; launch disabled by license.
         {% else %}
         {{ nessus.get('reason') or 'Scanner is offline or API credentials are not reachable.' }}
         {% endif %}
       </p>
     </div>
 
-    <!-- Greenbone / OpenVAS -->
+    <!-- ProjectDiscovery Nuclei -->
     <div class="fiq-card p-5 space-y-2">
       <div class="flex items-center justify-between">
-        <span class="text-xs font-bold text-slate-900">Greenbone / OpenVAS</span>
-        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold {% if greenbone.get('available') %}bg-emerald-100 text-emerald-800{% else %}bg-amber-100 text-amber-800{% endif %}">
-          {% if greenbone.get('available') %}Operational{% else %}Unavailable{% endif %}
+        <span class="text-xs font-bold text-slate-900">ProjectDiscovery Nuclei</span>
+        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold {% if nuclei.get('available') %}bg-emerald-100 text-emerald-800{% else %}bg-rose-100 text-rose-800{% endif %}">
+          {% if nuclei.get('available') %}Operational{% else %}Unavailable{% endif %}
         </span>
       </div>
       <p class="text-[11px] text-slate-500">
-        {% if greenbone.get('available') %}
-        Vulnerability manager, scanner daemon, and feeds are operational.
+        {% if nuclei.get('available') %}
+        Nuclei {{ nuclei.get('version', '') }} operational with {{ nuclei.get('templates_count', 0) }} local templates and safe policy guardrails.
         {% else %}
-        {{ greenbone.get('reason') or 'Manager/scanner service or vulnerability feeds are currently unavailable.' }}
+        {{ nuclei.get('reason') or 'Nuclei binary or template repository is currently unavailable.' }}
         {% endif %}
       </p>
     </div>
@@ -86,7 +88,7 @@
         </span>
       </div>
       <p class="text-[11px] text-slate-500">
-        {{ combined.get('reason') or 'Requires both Tenable Nessus and Greenbone/OpenVAS to be operational simultaneously.' }}
+        {{ combined.get('reason') or 'Correlates allowlisted Nmap NSE and ProjectDiscovery Nuclei findings cleanly.' }}
       </p>
     </div>
   </div>

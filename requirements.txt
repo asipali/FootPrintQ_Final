@@ -41,7 +41,6 @@ pymssql==2.4.6
 pytest==9.2.0
 python-dateutil==4.0.0
 python-dotenv==1.2.4
-python-gvm>=26.7.0
 python-multipart==0.0.33
 python-nmap==0.7.1
 python-whois==0.9.6

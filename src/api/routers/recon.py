@@ -178,12 +178,37 @@ def _validate_campaign_configuration(
             vuln_cfg["nse_scripts"] = approved
         raw_engines = vuln_cfg.get("engines")
         if isinstance(raw_engines, list):
-            clean_engines = [str(e).lower() for e in raw_engines if str(e).lower() in ("nse", "nessus", "greenbone")]
+            lowered_engines = [str(e).lower() for e in raw_engines]
+            if "greenbone" in lowered_engines:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Active Greenbone/OpenVAS scanning has been removed. Select 'nuclei' or 'nse' instead."
+                )
+            clean_engines = [e for e in lowered_engines if e in ("nse", "nuclei", "nessus")]
             vuln_cfg["engines"] = clean_engines
-            if clean_engines == ["nessus", "greenbone"] or (len(clean_engines) >= 2 and "nessus" in clean_engines and "greenbone" in clean_engines):
+            if len(clean_engines) >= 2 and "nse" in clean_engines and "nuclei" in clean_engines:
                 vuln_cfg.setdefault("engine", "combined")
             elif len(clean_engines) == 1:
                 vuln_cfg.setdefault("engine", clean_engines[0])
+        explicit_v_engine = str(vuln_cfg.get("engine") or "").lower()
+        if explicit_v_engine in ("greenbone", "combined_nessus_greenbone"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Active Greenbone/OpenVAS engine has been removed. Select 'nuclei', 'nse', or 'combined' instead."
+            )
+        if vuln_cfg.get("nuclei_profile") or explicit_v_engine in ("nuclei", "combined") or "nuclei" in (vuln_cfg.get("engines") or []):
+            from src.services.nuclei_policy_service import NucleiPolicyService
+            try:
+                vuln_cfg["nuclei_profile"] = NucleiPolicyService.validate_profile(vuln_cfg.get("nuclei_profile") or "http-security")
+                if vuln_cfg.get("nuclei_severities"):
+                    vuln_cfg["nuclei_severities"] = NucleiPolicyService.validate_severities(
+                        vuln_cfg.get("nuclei_severities"),
+                        vuln_cfg["nuclei_profile"],
+                    )
+                if vuln_cfg.get("nuclei_tags"):
+                    vuln_cfg["nuclei_tags"] = NucleiPolicyService.validate_tags(vuln_cfg.get("nuclei_tags"))
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     cfg["targets"] = [t["target"] for t in auth_info["targets"]]
     if selected_cats:
@@ -551,21 +576,32 @@ def start_recon_scan(
     v_engine = str(vuln_cfg.get("engine") or "").lower()
     v_engines = [str(e).lower() for e in (vuln_cfg.get("engines") or [])]
     need_greenbone = v_engine in ("greenbone", "combined_nessus_greenbone") or "greenbone" in v_engines or req.scan_type == "greenbone"
-    need_nessus = v_engine in ("nessus", "combined_nessus_greenbone") or "nessus" in v_engines or req.scan_type == "nessus"
+    need_nuclei = v_engine in ("nuclei", "combined") or "nuclei" in v_engines or req.scan_type == "nuclei"
+    need_nessus = v_engine in ("nessus",) or "nessus" in v_engines or req.scan_type == "nessus"
 
     if need_greenbone:
-        from src.collectors.greenbone_collector import GreenboneCollector
-        gb_ready = GreenboneCollector.normalize_readiness(GreenboneCollector().check_readiness())
-        if not gb_ready.get("ready"):
-            reason = "; ".join(gb_ready.get("errors", [])) or "Greenbone / OpenVAS is unavailable."
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot launch Greenbone assessment: {reason}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Active Greenbone/OpenVAS execution has been removed from FootprintIQ. Configure ProjectDiscovery Nuclei or Nmap NSE instead."
+        )
+    if need_nuclei:
+        from src.collectors.nuclei_collector import NucleiCollector
+        nuc_ready = NucleiCollector().check_readiness()
+        if not nuc_ready.get("ready"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot launch ProjectDiscovery Nuclei assessment: {nuc_ready.get('reason') or 'Nuclei is unavailable.'}"
+            )
     if need_nessus:
         from src.collectors.nessus_collector import NessusCollector
         n_conn = NessusCollector().test_connection()
         if not n_conn.get("connected"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Tenable Nessus is unavailable: {n_conn.get('error') or n_conn.get('status')}")
         if n_conn.get("scan_api_enabled") is False:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=n_conn.get("limitations") or "Nessus Essentials disables programmatic API scan launch (scan_api=false).")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=n_conn.get("limitations") or "Nessus Essentials disables programmatic API scan launch (scan_api=false). Import existing Nessus scan results instead."
+            )
 
     manager = ExecutionManager(repo=repo)
     try:
