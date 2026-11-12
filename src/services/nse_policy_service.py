@@ -4,8 +4,9 @@ Maintains approved script allowlists, enforces execution tiers (safe, discovery,
 and prevents command injection or arbitrary intrusive script execution.
 """
 
-from typing import List, Dict, Any, Tuple
+import os
 import re
+from typing import List, Dict, Any, Tuple
 
 # Approved scripts categorized by risk and purpose
 APPROVED_NSE_SCRIPTS: Dict[str, Dict[str, Any]] = {
@@ -141,7 +142,7 @@ APPROVED_NSE_SCRIPTS: Dict[str, Dict[str, Any]] = {
         "risk_tier": "safe",
         "safety_classification": "Safe Handshake Check",
         "ports": "5432",
-        "description": "Reads PostgreSQL greeting status and authentication parameters.",
+        "description": "Reads PostgreSQL greeting status and authentication parameters (requires postgresql-info.nse if installed).",
         "purpose": "Confirm exposed PostgreSQL service configuration.",
         "expected_output": "Supported authentication modes and server status."
     },
@@ -278,4 +279,25 @@ class NSEPolicyService:
     @staticmethod
     def get_script_metadata(script_name: str) -> Dict[str, Any]:
         return APPROVED_NSE_SCRIPTS.get(script_name.strip().lower(), {})
+
+    @staticmethod
+    def filter_installed_scripts(
+        approved_scripts: List[str],
+        scripts_dir: str = "/usr/share/nmap/scripts",
+    ) -> Tuple[List[str], List[str]]:
+        """
+        Filters approved NSE scripts against actual installed `.nse` files when the
+        system Nmap scripts directory is present, preventing one missing script from
+        causing Nmap's Lua engine to abort all other valid scripts.
+        """
+        if not os.path.isdir(scripts_dir):
+            return list(approved_scripts), []
+        installed: List[str] = []
+        missing: List[str] = []
+        for s in approved_scripts:
+            if os.path.isfile(os.path.join(scripts_dir, f"{s}.nse")):
+                installed.append(s)
+            else:
+                missing.append(s)
+        return installed, missing
 

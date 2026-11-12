@@ -222,12 +222,17 @@ class AuthService:
             )
             raise PermissionError("Account registration is pending administrator approval.")
 
+        self.repo.record_user_login(user["username"])
+        refreshed = self.repo.get_user_by_username(user["username"]) or user
+        token_version = int(refreshed.get("token_version", 1) or 1)
+
         csrf_token = secrets.token_urlsafe(32)
         token = create_access_token({
             "sub": user["username"],
             "user_id": user["id"],
             "role": role,
             "csrf": csrf_token,
+            "tv": token_version,
         })
 
         record_security_audit(
@@ -235,7 +240,7 @@ class AuthService:
             user=user,
             action="LOGIN_SUCCESS",
             target_resource=username,
-            details={"role": role},
+            details={"role": role, "token_version": token_version},
             outcome="SUCCESS",
             request=request,
         )
@@ -248,6 +253,53 @@ class AuthService:
             "role": role,
             "user_id": user["id"]
         }
+
+    def change_own_password(
+        self,
+        actor_user: Dict[str, Any],
+        current_password: str,
+        new_password: str,
+        request: Optional[Request] = None,
+    ) -> Dict[str, Any]:
+        """Verifies current password, enforces length rules, updates bcrypt hash, and invalidates prior sessions."""
+        username = str(actor_user.get("username") or "").strip()
+        live_user = self.repo.get_user_by_username(username)
+        if not live_user:
+            raise ValueError("Authenticated user account was not found.")
+        if not current_password or not verify_password(current_password, live_user.get("hashed_password") or ""):
+            record_security_audit(
+                self.repo,
+                user=actor_user,
+                action="PASSWORD_CHANGE_FAILED",
+                target_resource=username,
+                details={"reason": "invalid_current_password"},
+                outcome="FAILED",
+                request=request,
+            )
+            raise PermissionError("Current password is incorrect.")
+        if not new_password or len(new_password) < 8:
+            raise ValueError("New password must be at least 8 characters long.")
+        if verify_password(new_password, live_user.get("hashed_password") or ""):
+            raise ValueError("New password must differ from your current password.")
+
+        updated = self.repo.update_user_password(
+            username,
+            hash_password(new_password),
+            invalidate_sessions=True,
+        )
+        if not updated:
+            raise ValueError("Unable to update password.")
+
+        record_security_audit(
+            self.repo,
+            user=actor_user,
+            action="PASSWORD_CHANGED",
+            target_resource=username,
+            details={"sessions_invalidated": True, "token_version": updated.get("token_version")},
+            outcome="SUCCESS",
+            request=request,
+        )
+        return updated
 
     def approve_investigator(
         self,

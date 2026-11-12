@@ -84,6 +84,9 @@ class StartReconRequest(BaseModel):
     scan_type: Optional[str] = Field(None, example="passive")
     profile: Optional[str] = Field("lab-basic", example="standard")
     custom_scripts: Optional[List[str]] = Field(None, example=["http-title", "ssl-cert"])
+    selected_categories: Optional[List[str]] = None
+    scan_config: Optional[Dict[str, Any]] = None
+    scan_config_json: Optional[str] = None
 
 
 class RemediationUpdateRequest(BaseModel):
@@ -480,10 +483,102 @@ def create_profile(
     return prof
 
 
+@router.get("/{recon_id}/runs")
+def list_recon_runs(
+    recon_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    """Lists all independent ScanExecution runs (`Run 001`, `Run 002`, ...) under one Investigation."""
+    campaign = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        request=request,
+        action_label="RECON_RUNS_LIST",
+    )
+    if not campaign.get("recon_id"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
+
+    runs = repo.list_scans(investigation_id=recon_id)
+    all_findings = repo.list_findings(investigation_id=recon_id)
+    all_evidence = repo.list_evidence(investigation_id=recon_id)
+    all_reports = repo.list_report_records(investigation_id=recon_id)
+
+    enriched = []
+    for r in runs:
+        sid = r.get("scan_id")
+        run_findings = [f for f in all_findings if f.get("scan_id") == sid]
+        run_evidence = [e for e in all_evidence if e.get("scan_id") == sid]
+        run_reports = [rep for rep in all_reports if rep.get("scan_id") == sid]
+        sev_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Informational": 0}
+        for f in run_findings:
+            sv = str(f.get("severity") or "Informational").title()
+            if sv == "Info":
+                sv = "Informational"
+            if sv in sev_counts:
+                sev_counts[sv] += 1
+        item = dict(r)
+        item["findings_count"] = len(run_findings)
+        item["evidence_count"] = len(run_evidence)
+        item["reports_count"] = len(run_reports)
+        item["severity_counts"] = sev_counts
+        enriched.append(item)
+    return enriched
+
+
+@router.get("/{recon_id}/runs/{scan_id}")
+def get_recon_run_detail(
+    recon_id: str,
+    scan_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    """Returns full isolated telemetry, findings, evidence, and reports for one specific ScanExecution run."""
+    campaign = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        request=request,
+        action_label="RECON_RUN_VIEW",
+    )
+    if not campaign.get("recon_id"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
+
+    scan = repo.get_scan(scan_id)
+    if not scan or (scan.get("recon_id") != recon_id and scan.get("investigation_id") != recon_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Scan Run '{scan_id}' not found under investigation '{recon_id}'.")
+
+    findings = repo.list_findings(investigation_id=recon_id, scan_id=scan_id)
+    evidence = repo.list_evidence(investigation_id=recon_id, scan_id=scan_id)
+    reports = repo.list_report_records(investigation_id=recon_id, scan_id=scan_id)
+    bundle = load_campaign_results_bundle(recon_id, repo, scan_id=scan_id)
+    return {
+        "campaign": campaign,
+        "scan": scan,
+        "findings_count": len(findings),
+        "evidence_count": len(evidence),
+        "reports_count": len(reports),
+        "findings": findings,
+        "explained_findings": enrich_findings_with_explanations(findings),
+        "evidence": evidence,
+        "reports": reports,
+        "passive_results": bundle["passive_results"],
+        "active_hosts": bundle["active_hosts"],
+        "discovered_ports": bundle["discovered_ports"],
+        "scanner_statuses": bundle["scanner_statuses"],
+        "failed_stages": bundle["failed_stages"],
+        "events": bundle["events"],
+    }
+
+
 @router.get("/{recon_id}")
 def get_recon_campaign(
     recon_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
@@ -499,11 +594,11 @@ def get_recon_campaign(
 
     targets = repo.list_authorized_targets(investigation_id=recon_id)
     scans = repo.list_scans(investigation_id=recon_id)
-    findings = repo.list_findings(investigation_id=recon_id)
-    evidence = repo.list_evidence(investigation_id=recon_id)
-    bundle = load_campaign_results_bundle(recon_id, repo)
-    reports = repo.list_report_records(investigation_id=recon_id)
-    live_ctx = ExecutionManager(repo=repo).build_live_snapshot(recon_id, campaign, scans, bundle)
+    findings = repo.list_findings(investigation_id=recon_id, scan_id=scan_id)
+    evidence = repo.list_evidence(investigation_id=recon_id, scan_id=scan_id)
+    bundle = load_campaign_results_bundle(recon_id, repo, scan_id=scan_id)
+    reports = repo.list_report_records(investigation_id=recon_id, scan_id=scan_id)
+    live_ctx = ExecutionManager(repo=repo).build_live_snapshot(recon_id, campaign, scans, bundle, scan_id=scan_id)
 
     return {
         **campaign,
@@ -544,10 +639,25 @@ def start_recon_scan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
 
     # Verify configuration completeness and explicit availability of requested vulnerability engines
-    try:
-        cfg = json.loads(campaign.get("scan_config_json") or "{}")
-    except Exception:
+    if isinstance(req.scan_config, dict) and req.scan_config:
+        cfg = dict(req.scan_config)
+        if req.selected_categories and not cfg.get("selected_categories"):
+            cfg["selected_categories"] = req.selected_categories
+    elif req.scan_config_json:
+        try:
+            cfg = json.loads(req.scan_config_json)
+        except Exception:
+            cfg = {}
+    else:
+        try:
+            cfg = json.loads(campaign.get("scan_config_json") or "{}")
+        except Exception:
+            cfg = {}
+    if not isinstance(cfg, dict):
         cfg = {}
+    if req.selected_categories and not cfg.get("selected_categories"):
+        cfg["selected_categories"] = req.selected_categories
+
     selected_cats = [str(c).lower() for c in (cfg.get("selected_categories") or [])]
     eff_scan_type = req.scan_type or campaign.get("selected_scan_types") or "combined"
     if eff_scan_type.lower() == "draft" and not selected_cats:
@@ -605,12 +715,15 @@ def start_recon_scan(
 
     manager = ExecutionManager(repo=repo)
     try:
+        has_override = bool(req.scan_config or req.scan_config_json or req.selected_categories)
         job = manager.start_recon_scan(
             recon_id=recon_id,
             scan_type=eff_scan_type,
             profile=req.profile or "lab-basic",
             custom_scripts=req.custom_scripts,
-            operator=current_user.get("username", "asip_ali")
+            operator=current_user.get("username", "asip_ali"),
+            initiating_user_id=current_user.get("id", current_user.get("user_id")),
+            scan_config_override=cfg if has_override else None,
         )
 
         record_security_audit(
@@ -618,7 +731,12 @@ def start_recon_scan(
             user=current_user,
             action="RECON_SCAN_STARTED",
             target_resource=campaign["target_value"],
-            details={"recon_id": recon_id, "scan_id": job["scan_id"], "scan_type": eff_scan_type},
+            details={
+                "recon_id": recon_id,
+                "scan_id": job["scan_id"],
+                "run_number": job.get("run_number"),
+                "scan_type": eff_scan_type,
+            },
             outcome="SUCCESS",
             request=request,
         )
@@ -665,6 +783,7 @@ def cancel_recon_scan(
 def get_recon_events(
     recon_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
@@ -673,14 +792,15 @@ def get_recon_events(
     if not scans:
         return []
 
-    latest_scan = scans[0]
-    return repo.list_scan_execution_events(latest_scan["scan_id"])
+    target_scan_id = scan_id or scans[0]["scan_id"]
+    return repo.list_scan_execution_events(target_scan_id)
 
 
 @router.get("/{recon_id}/stream")
 async def stream_recon_events(
     recon_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
@@ -690,7 +810,7 @@ async def stream_recon_events(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
 
     manager = ExecutionManager(repo=repo)
-    ctx = manager.get_scan_context(recon_id)
+    ctx = manager.get_scan_context(recon_id, scan_id=scan_id)
 
     async def event_generator():
         # 1. First yield all historical events from database
@@ -698,7 +818,7 @@ async def stream_recon_events(
         sent_messages = set()
 
         if scans:
-            latest_scan_id = scans[0]["scan_id"]
+            latest_scan_id = scan_id or scans[0]["scan_id"]
             db_events = repo.list_scan_execution_events(latest_scan_id)
             for ev in db_events:
                 msg_key = f"{ev.get('timestamp')}:{ev.get('message')}"
@@ -745,11 +865,12 @@ async def stream_recon_events(
 def get_recon_findings(
     recon_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user),
     repo: FootprintIQRepository = Depends(get_repository)
 ):
     enforce_investigation_access(repo, current_user, recon_id, request=request, action_label="RECON_FINDINGS")
-    return repo.list_findings(investigation_id=recon_id)
+    return repo.list_findings(investigation_id=recon_id, scan_id=scan_id)
 
 
 @router.post("/{recon_id}/remediation")

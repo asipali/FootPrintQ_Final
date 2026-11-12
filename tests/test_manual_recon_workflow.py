@@ -572,6 +572,8 @@ class TestManualReconWorkflow(unittest.TestCase):
         saved_scans = dict(self.repo._mem_scans)
         saved_findings = dict(self.repo._mem_findings)
         saved_reports = dict(self.repo._mem_reports)
+        saved_evidence = dict(self.repo._mem_evidence)
+        saved_audit = list(self.repo._mem_audit)
         try:
             self.repo._mem_recon_campaigns.clear()
             self.repo._mem_investigations.clear()
@@ -579,6 +581,8 @@ class TestManualReconWorkflow(unittest.TestCase):
             self.repo._mem_scans.clear()
             self.repo._mem_findings.clear()
             self.repo._mem_reports.clear()
+            self.repo._mem_evidence.clear()
+            self.repo._mem_audit.clear()
 
             list_empty = self.client.get("/recon")
             self.assertEqual(list_empty.status_code, 200)
@@ -602,6 +606,8 @@ class TestManualReconWorkflow(unittest.TestCase):
             self.repo._mem_scans.update(saved_scans)
             self.repo._mem_findings.update(saved_findings)
             self.repo._mem_reports.update(saved_reports)
+            self.repo._mem_evidence.update(saved_evidence)
+            self.repo._mem_audit[:] = saved_audit
 
         # Verify 3D CSS classes + reduced-motion accessibility override
         css_resp = self.client.get("/static/css/app.css")

@@ -57,6 +57,120 @@
     };
   }
 
+  // =========================================================================
+  // 0B. THEME PREFERENCE ENGINE (LIGHT / DARK / SYSTEM) & IST TIMEZONE HELPER
+  // =========================================================================
+  const THEME_STORAGE_KEY = 'fiq_theme';
+
+  window.FIQ_ResolveEffectiveTheme = function (pref) {
+    const p = String(pref || 'light').toLowerCase();
+    if (p === 'dark' || p === 'light') return p;
+    if (p === 'system') {
+      try {
+        return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      } catch (_) {}
+    }
+    return 'light';
+  };
+
+  window.FIQ_GetThemePreference = function () {
+    const isAuth = (document.querySelector('meta[name="fiq-authenticated"]') || {}).content === 'true';
+    const meta = document.querySelector('meta[name="fiq-theme-preference"]');
+    const metaPref = meta ? (meta.getAttribute('content') || 'light') : 'light';
+    if (isAuth) return metaPref;
+    try {
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch (_) {}
+    return metaPref || 'light';
+  };
+
+  window.FIQ_GetTheme = function () {
+    return document.documentElement.getAttribute('data-theme') || 'light';
+  };
+
+  function syncThemeToggleUI(pref, eff) {
+    document.querySelectorAll('[data-fiq-theme-toggle]').forEach(function (btn) {
+      btn.setAttribute('aria-pressed', eff === 'dark' ? 'true' : 'false');
+      btn.setAttribute('title', `Theme: ${pref} (currently ${eff}) — click to switch`);
+      const lbl = btn.querySelector('[data-fiq-theme-label]');
+      if (lbl) lbl.textContent = eff === 'dark' ? 'Dark' : 'Light';
+    });
+    document.querySelectorAll('[data-theme-choice]').forEach(function (el) {
+      const choice = el.getAttribute('data-theme-choice');
+      const active = choice === pref;
+      el.classList.toggle('ring-2', active);
+      el.classList.toggle('ring-blue-500', active);
+      el.classList.toggle('border-blue-500', active);
+    });
+  }
+
+  window.FIQ_ApplyTheme = async function (pref, persistServer) {
+    const cleanPref = (pref === 'dark' || pref === 'light' || pref === 'system') ? pref : 'light';
+    const eff = window.FIQ_ResolveEffectiveTheme(cleanPref);
+    try { localStorage.setItem(THEME_STORAGE_KEY, cleanPref); } catch (_) {}
+    document.documentElement.setAttribute('data-theme', eff);
+    document.documentElement.setAttribute('data-theme-pref', cleanPref);
+    if (document.body) {
+      document.body.setAttribute('data-theme', eff);
+    }
+    syncThemeToggleUI(cleanPref, eff);
+    window.dispatchEvent(new CustomEvent('fiq:themechange', { detail: { preference: cleanPref, effective: eff } }));
+    if (persistServer) {
+      try {
+        await window.fetch('/api/v1/auth/me/preferences', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ theme_preference: cleanPref }),
+        });
+      } catch (_) {}
+    }
+    return eff;
+  };
+
+  window.FIQ_FormatIST = function (rawTs, includeSeconds) {
+    if (!rawTs) return '—';
+    let s = String(rawTs).trim();
+    if (!s) return '—';
+    if (s.includes('IST')) return s;
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) {
+      s = s.replace(' ', 'T') + 'Z';
+    }
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return String(rawTs);
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: includeSeconds ? '2-digit' : undefined,
+        hour12: true,
+      }).formatToParts(d);
+      const map = {};
+      parts.forEach(function (p) { map[p.type] = p.value; });
+      const dayPeriod = (map.dayPeriod || '').toUpperCase();
+      const timeCore = includeSeconds
+        ? `${map.hour}:${map.minute}:${map.second}`
+        : `${map.hour}:${map.minute}`;
+      return `${map.day} ${map.month} ${map.year}, ${timeCore} ${dayPeriod} IST`;
+    } catch (_) {
+      return s;
+    }
+  };
+
+  try {
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+        if (window.FIQ_GetThemePreference() === 'system') {
+          window.FIQ_ApplyTheme('system', false);
+        }
+      });
+    }
+  } catch (_) {}
+
   window.FIQ_Logout = async function () {
     try {
       await window.fetch('/api/v1/auth/logout', { method: 'POST' });
@@ -385,6 +499,14 @@
     initScrollAnimations();
     initSidebar();
     init3DCards();
+    const initialPref = window.FIQ_GetThemePreference();
+    window.FIQ_ApplyTheme(initialPref, false);
+    document.querySelectorAll('[data-fiq-theme-toggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const nextTheme = window.FIQ_GetTheme() === 'dark' ? 'light' : 'dark';
+        window.FIQ_ApplyTheme(nextTheme, true);
+      });
+    });
     if (typeof lucide !== 'undefined') {
       lucide.createIcons();
     }

@@ -18,6 +18,7 @@ import asyncio
 from src.db.repository import FootprintIQRepository
 from src.orchestration.unified_orchestrator import UnifiedScanOrchestrator
 from src.authorization.target_authorizer import TargetAuthorizer, TargetAuthorizationError
+from src.utils.timezone import format_ist
 
 logger = logging.getLogger("FootprintIQ.ExecutionManager")
 
@@ -119,28 +120,78 @@ class ExecutionManager:
             except Exception:
                 pass
 
+    @staticmethod
+    def _extract_scanners_and_components(scan_type: str, cfg: Dict[str, Any]) -> tuple[List[str], List[str]]:
+        """Derives truthful selected scanner & component lists from run configuration."""
+        cats = [str(c).lower() for c in (cfg.get("selected_categories") or [])]
+        passive_cfg = cfg.get("passive") or {}
+        active_cfg = cfg.get("active") or {}
+        vuln_cfg = cfg.get("vulnerability") or {}
+        scanners: List[str] = []
+        components: List[str] = []
+
+        run_passive = ("passive" in cats) or (not cats and scan_type in ("passive", "combined"))
+        run_active = ("active" in cats) or (not cats and scan_type in ("network_discovery", "nmap_services", "combined"))
+        run_vuln = ("vulnerability" in cats) or (not cats and scan_type in ("nmap_nse", "nuclei", "nessus", "combined"))
+
+        if run_passive:
+            checks = passive_cfg.get("selected_checks") or ["whois_lookup", "rdap_lookup", "dns_records"]
+            scanners.append("Passive Intelligence (WHOIS/RDAP/DNS/theHarvester)")
+            components.extend([str(c) for c in checks])
+        if run_active:
+            scanners.append("Nmap Active Discovery")
+            if active_cfg.get("ports"):
+                components.append(f"ports:{active_cfg['ports']}")
+            if active_cfg.get("service_detection"):
+                components.append("service_detection")
+            for sc in (active_cfg.get("service_checks") or []):
+                components.append(str(sc))
+        if run_vuln:
+            v_eng = str(vuln_cfg.get("engine") or "").lower()
+            v_engs = [str(e).lower() for e in (vuln_cfg.get("engines") or [])]
+            if (not cats and scan_type in ("nmap_nse", "combined")) or "nse" in v_engs or v_eng in ("nse", "all") or vuln_cfg.get("nse_scripts"):
+                scanners.append("Nmap NSE")
+                for scr in (vuln_cfg.get("nse_scripts") or []):
+                    components.append(f"nse:{scr}")
+            if (not cats and scan_type in ("nuclei", "combined")) or "nuclei" in v_engs or v_eng in ("nuclei", "combined", "all"):
+                scanners.append("ProjectDiscovery Nuclei")
+                if vuln_cfg.get("nuclei_profile"):
+                    components.append(f"nuclei:{vuln_cfg['nuclei_profile']}")
+            if (not cats and scan_type in ("nessus", "combined")) or "nessus" in v_engs or v_eng in ("nessus", "all"):
+                scanners.append("Tenable Nessus")
+                if vuln_cfg.get("nessus_template_uuid"):
+                    components.append(f"nessus_template:{vuln_cfg['nessus_template_uuid']}")
+
+        return list(dict.fromkeys(scanners)), list(dict.fromkeys(components))
+
     def start_recon_scan(
         self,
         recon_id: str,
         scan_type: str = "combined",
         profile: str = "default",
         custom_scripts: Optional[List[str]] = None,
-        operator: str = "asip_ali"
+        operator: str = "asip_ali",
+        initiating_user_id: Optional[int] = None,
+        scan_config_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Launches an asynchronous background scan job for the given Recon Campaign.
-        Returns the scan ID and job initiation acknowledgment.
+        Each call creates an independent numbered ScanExecution run (`Run 001`, `Run 002`, ...)
+        without overwriting prior runs, findings, or evidence.
         """
         campaign = self.repo.get_recon_campaign(recon_id)
         if not campaign:
             raise ValueError(f"Recon Campaign '{recon_id}' not found.")
 
         target = campaign["target_value"]
-        raw_cfg = campaign.get("scan_config_json") or "{}"
-        try:
-            scan_config = json.loads(raw_cfg) if isinstance(raw_cfg, str) else (raw_cfg or {})
-        except Exception:
-            scan_config = {}
+        if isinstance(scan_config_override, dict) and scan_config_override:
+            scan_config = dict(scan_config_override)
+        else:
+            raw_cfg = campaign.get("scan_config_json") or "{}"
+            try:
+                scan_config = json.loads(raw_cfg) if isinstance(raw_cfg, str) else (raw_cfg or {})
+            except Exception:
+                scan_config = {}
 
         selected_categories = [str(c).lower() for c in (scan_config.get("selected_categories") or [])]
         targets_list = scan_config.get("targets") or [t.strip() for t in str(target).split(",") if t.strip()]
@@ -168,12 +219,20 @@ class ExecutionManager:
                 if not auth_rec.authorized:
                     raise TargetAuthorizationError(f"Target '{tgt}' is not authorized: {getattr(auth_rec, 'failure_reason', 'Unauthorized')}")
 
-        # Atomically claim campaign and create scan execution record (prevents double-launch race condition)
+        sel_scanners, sel_components = self._extract_scanners_and_components(scan_type, scan_config)
+        cfg_json_str = json.dumps(scan_config) if scan_config else None
+
+        # Atomically claim campaign and create independent scan execution run record
         job_claim = self.repo.claim_and_start_recon_scan(
             recon_id=recon_id,
             scan_type=scan_type,
             profile=profile,
-            operator=operator
+            operator=operator,
+            initiating_user_id=initiating_user_id,
+            selected_scanners=sel_scanners,
+            selected_components=sel_components,
+            scan_config_json=cfg_json_str,
+            target_authorization_ref=campaign.get("authorized_by"),
         )
         scan_id = job_claim["scan_id"]
 
@@ -195,6 +254,8 @@ class ExecutionManager:
             "message": "Scan job queued and executing in background.",
             "recon_id": recon_id,
             "scan_id": scan_id,
+            "run_number": job_claim.get("run_number"),
+            "run_label": job_claim.get("run_label"),
             "target": target,
             "scan_type": scan_type,
             "profile": profile
@@ -258,7 +319,9 @@ class ExecutionManager:
         scanners_executed: List[str] = []
         succeeded_stages = 0
         failed_stages = 0
+        partial_stages = 0
         failed_stage_names: List[str] = []
+        partial_stage_names: List[str] = []
 
         try:
             if ctx.cancel_requested.is_set():
@@ -307,12 +370,21 @@ class ExecutionManager:
                         dns_count = sum(len(v) for v in ((p_res.get("domain_intel") or {}).get("dns_records") or {}).values() if isinstance(v, list))
                         emails_count = len((p_res.get("osint_intel") or {}).get("emails") or [])
                         unavail = p_res.get("unavailable_checks") or []
+                        skipped_checks = p_res.get("checks_skipped") or []
+                        p_detail = f"DNS records: {dns_count}, Subdomains: {dom_subs}, Emails: {emails_count}"
+                        if skipped_checks:
+                            p_detail += f" ({len(skipped_checks)} incompatible check(s) skipped)"
 
                         scanner_statuses.append({
                             "scanner": "Passive Intelligence",
                             "target": tgt,
                             "status": "COMPLETED",
-                            "detail": f"DNS records: {dns_count}, Subdomains: {dom_subs}, Emails: {emails_count}"
+                            "detail": p_detail,
+                            "execution_meta": {
+                                "target_kind": p_res.get("target_kind"),
+                                "executed_count": len(p_res.get("checks_executed") or []),
+                                "skipped_count": len(skipped_checks),
+                            },
                         })
                         if unavail:
                             for u in unavail:
@@ -421,7 +493,7 @@ class ExecutionManager:
                             "web_enum": ["http-title", "http-headers", "http-methods", "http-security-headers"],
                             "smb_enum": ["smb-os-discovery", "smb-security-mode"],
                             "ftp_enum": ["ftp-anon"],
-                            "db_enum": ["mysql-info", "postgresql-info"],
+                            "db_enum": ["mysql-info"],
                             "dns_enum": ["dns-nsid", "dns-recursion"],
                             "ssl_enum": ["ssl-cert", "ssl-enum-ciphers"]
                         }
@@ -432,6 +504,9 @@ class ExecutionManager:
                             enum_scripts = list(dict.fromkeys(enum_scripts))
                             self._emit_event(ctx, "log", f"Running targeted service enumeration scripts ({len(enum_scripts)}) on {tgt}...", stage="ACTIVE_RECON", component="Service Enum")
                             nse_enum_res = orchestrator._run_nmap_nse(tgt, enum_scripts, ctx.recon_id, ctx.scan_id)
+                            if nse_enum_res.get("status") == "FAILED":
+                                enum_err = "; ".join(nse_enum_res.get("errors", [])) or "Service enumeration scripts failed"
+                                self._emit_event(ctx, "warning", f"Service enumeration notice for {tgt}: {enum_err}", stage="ACTIVE_RECON", component="Service Enum")
                             for f in nse_enum_res.get("findings", []):
                                 all_findings.append(f)
                                 self._emit_event(ctx, "finding_discovered", f"Service Check: {f.get('title')} on port {f.get('port')}", stage="ACTIVE_RECON", component="Service Enum", details=f)
@@ -477,18 +552,55 @@ class ExecutionManager:
                         self._emit_event(ctx, "stage_start", f"Running allowlisted vulnerability checks against {tgt}...", stage="VULN_NSE", progress=min(78, base_prog + 50), component="NSE Scanner")
                         try:
                             nse_res = orchestrator._run_nmap_nse(tgt, req_scripts, ctx.recon_id, ctx.scan_id)
-                            if nse_res.get("status") == "FAILED":
+                            nse_stat = str(nse_res.get("status") or "COMPLETED").upper()
+                            nse_findings = nse_res.get("findings", [])
+                            nse_meta = nse_res.get("execution_meta") or {}
+                            if nse_stat == "FAILED":
                                 failed_stages += 1
                                 failed_stage_names.append(f"NSE Check ({tgt})")
                                 err_txt = "; ".join(nse_res.get("errors", [])) or "NSE scan failed"
-                                scanner_statuses.append({"scanner": "Nmap NSE Assessment", "target": tgt, "status": "FAILED", "detail": err_txt})
+                                scanner_statuses.append({
+                                    "scanner": "Nmap NSE Assessment",
+                                    "target": tgt,
+                                    "status": "FAILED",
+                                    "detail": err_txt,
+                                    "execution_meta": nse_meta,
+                                })
                                 self._emit_event(ctx, "error", f"NSE vulnerability check failed for {tgt}: {err_txt}", stage="VULN_NSE", component="NSE Scanner")
+                            elif nse_stat == "PARTIAL":
+                                partial_stages += 1
+                                partial_stage_names.append(f"NSE Check ({tgt})")
+                                scanners_executed.append("nmap_nse")
+                                all_findings.extend(nse_findings)
+                                err_txt = "; ".join(nse_res.get("errors", [])) or "Partial execution"
+                                detail_txt = f"Findings: {len(nse_findings)} | Partial: {err_txt}"
+                                scanner_statuses.append({
+                                    "scanner": "Nmap NSE Assessment",
+                                    "target": tgt,
+                                    "status": "PARTIAL",
+                                    "detail": detail_txt,
+                                    "execution_meta": nse_meta,
+                                })
+                                for f in nse_findings:
+                                    self._emit_event(ctx, "finding_discovered", f"Detected: {f.get('title')} ({f.get('severity')}) on port {f.get('port')}", stage="VULN_NSE", component="NSE Scanner", details=f)
+                                self._emit_event(ctx, "warning", f"NSE checks partially completed for {tgt} ({len(nse_findings)} finding(s)): {err_txt}", stage="VULN_NSE", progress=min(82, base_prog + 55), component="NSE Scanner")
                             else:
                                 succeeded_stages += 1
                                 scanners_executed.append("nmap_nse")
-                                nse_findings = nse_res.get("findings", [])
                                 all_findings.extend(nse_findings)
-                                scanner_statuses.append({"scanner": "Nmap NSE Assessment", "target": tgt, "status": "COMPLETED", "detail": f"Findings: {len(nse_findings)}"})
+                                exec_cnt = len(nse_res.get("executed_scripts") or [])
+                                dur_txt = f" in {nse_meta.get('duration_seconds')}s" if nse_meta.get("duration_seconds") is not None else ""
+                                skip_cnt = len(nse_res.get("skipped_scripts") or [])
+                                detail_txt = f"Scripts: {exec_cnt}{dur_txt} | Findings: {len(nse_findings)}"
+                                if skip_cnt:
+                                    detail_txt += f" ({skip_cnt} unavailable skipped)"
+                                scanner_statuses.append({
+                                    "scanner": "Nmap NSE Assessment",
+                                    "target": tgt,
+                                    "status": "COMPLETED",
+                                    "detail": detail_txt,
+                                    "execution_meta": nse_meta,
+                                })
                                 for f in nse_findings:
                                     self._emit_event(ctx, "finding_discovered", f"Detected: {f.get('title')} ({f.get('severity')}) on port {f.get('port')}", stage="VULN_NSE", component="NSE Scanner", details=f)
                                 self._emit_event(ctx, "stage_complete", f"NSE checks completed for {tgt} ({len(nse_findings)} finding(s)).", stage="VULN_NSE", progress=min(82, base_prog + 55), component="NSE Scanner")
@@ -580,7 +692,10 @@ class ExecutionManager:
                                                 seaweed_fid=ev.get("seaweed_fid"),
                                                 seaweed_url=ev.get("seaweed_url"),
                                                 local_path=ev.get("local_path"),
-                                                scan_id=ctx.scan_id
+                                                scan_id=ctx.scan_id,
+                                                scanner_source="Tenable Nessus",
+                                                target=tgt,
+                                                content_type="application/xml",
                                             )
                                         except Exception as e_ev:
                                             logger.warning(f"Evidence archival notice for Nessus export: {e_ev}")
@@ -626,45 +741,50 @@ class ExecutionManager:
                             nuc_findings = nuc_res.get("findings") or []
                             for f in nuc_findings:
                                 all_findings.append(f)
-                                worker_repo.add_vulnerability_finding(ctx.recon_id, f, scan_id=ctx.scan_id)
                                 self._emit_event(ctx, "finding_discovered", f"Nuclei finding: {f.get('title')}", stage="VULN_NUCLEI", component="Nuclei", details=f)
-                            nuc_ev = nuc_res.get("evidence")
-                            if isinstance(nuc_ev, dict) and nuc_ev.get("file_name"):
-                                try:
-                                    worker_repo.add_evidence_record(
-                                        investigation_id=ctx.recon_id,
-                                        evidence_type="nuclei_jsonl",
-                                        file_name=nuc_ev["file_name"],
-                                        file_size=nuc_ev["file_size"],
-                                        sha256_hash=nuc_ev["sha256_hash"],
-                                        seaweed_fid=nuc_ev.get("seaweed_fid"),
-                                        seaweed_url=nuc_ev.get("seaweed_url"),
-                                        local_path=nuc_ev.get("local_path"),
-                                        scan_id=ctx.scan_id,
-                                    )
-                                except Exception as ev_err:
-                                    logger.warning(f"Nuclei evidence record notice: {ev_err}")
-                            nuc_status = nuc_res.get("status", "COMPLETED")
+                            nuc_status = str(nuc_res.get("status", "COMPLETED") or "COMPLETED").upper()
                             if nuc_status == "CANCELLED":
                                 self._handle_cancellation(ctx, worker_repo)
                                 return
                             scanners_executed.append("nuclei")
-                            if nuc_status in ("COMPLETED", "PARTIAL"):
+                            nuc_meta = nuc_res.get("execution_meta") or {}
+                            if nuc_status == "COMPLETED":
                                 succeeded_stages += 1
-                            elif explicit_nuclei:
+                            elif nuc_status == "PARTIAL":
+                                partial_stages += 1
+                                partial_stage_names.append(f"ProjectDiscovery Nuclei ({tgt})")
+                            elif nuc_status in ("FAILED", "TIMEOUT") or explicit_nuclei:
                                 failed_stages += 1
-                                failed_stage_names.append(f"Nuclei ({tgt})")
-                            detail_msg = f"Profile: {nuclei_profile} | Findings: {len(nuc_findings)}"
+                                failed_stage_names.append(f"ProjectDiscovery Nuclei ({tgt})")
+                            else:
+                                partial_stages += 1
+                                partial_stage_names.append(f"ProjectDiscovery Nuclei ({tgt})")
+
+                            dur_s = nuc_res.get("duration_seconds")
+                            to_s = nuc_res.get("timeout_seconds")
+                            timing_note = ""
+                            if dur_s is not None and to_s is not None:
+                                timing_note = f" | {dur_s}s/{to_s}s"
+                            elif dur_s is not None:
+                                timing_note = f" | {dur_s}s"
+                            detail_msg = f"Profile: {nuclei_profile} | Findings: {len(nuc_findings)}{timing_note}"
                             if nuc_res.get("error"):
-                                detail_msg = nuc_res["error"]
-                            scanner_statuses.append({"scanner": "ProjectDiscovery Nuclei", "target": tgt, "status": nuc_status, "detail": detail_msg})
+                                detail_msg = f"{detail_msg} | {nuc_res['error']}"
+                            scanner_statuses.append({
+                                "scanner": "ProjectDiscovery Nuclei",
+                                "target": tgt,
+                                "status": nuc_status,
+                                "detail": detail_msg,
+                                "execution_meta": nuc_meta,
+                            })
                             self._emit_event(
                                 ctx,
-                                "stage_complete" if nuc_status in ("COMPLETED", "PARTIAL") else "warning",
-                                f"Nuclei assessment finished for {tgt} ({len(nuc_findings)} finding(s)).",
+                                "stage_complete" if nuc_status == "COMPLETED" else "warning",
+                                f"Nuclei assessment {nuc_status.lower()} for {tgt} ({len(nuc_findings)} finding(s){timing_note}).",
                                 stage="VULN_NUCLEI",
                                 progress=94,
                                 component="Nuclei",
+                                details=nuc_meta or None,
                             )
                         except Exception as nuc_err:
                             scanner_statuses.append({"scanner": "ProjectDiscovery Nuclei", "target": tgt, "status": "FAILED", "detail": str(nuc_err)})
@@ -681,21 +801,27 @@ class ExecutionManager:
             self._emit_event(ctx, "stage_start", "Correlating collected findings, building Entity Graph, and calculating risk exposure score...", stage="CORRELATION", progress=96, component="Exposure & Graph Engine")
             from src.services.exposure_scoring import ExposureScoringEngine
             from src.services.graph_intelligence_service import GraphIntelligenceService
-            exposure_report = ExposureScoringEngine.calculate_investigation_exposure(all_findings)
+            exposure_report = ExposureScoringEngine.calculate_investigation_exposure(
+                all_findings, discovered_ports=discovered_ports
+            )
             worker_repo.update_exposure_score(ctx.recon_id, exposure_report["exposure_score"])
 
             elapsed = round(time.time() - start_ts, 2)
             ctx.elapsed_seconds = elapsed
             # Determine truthful campaign & scan completion status
-            if failed_stages > 0 and succeeded_stages == 0:
+            incomplete_names = list(dict.fromkeys(failed_stage_names + partial_stage_names))
+            if failed_stages > 0 and succeeded_stages == 0 and partial_stages == 0:
                 camp_status = "Failed"
                 scan_status = "failed"
-                final_msg = f"Campaign failed in {elapsed}s: {', '.join(failed_stage_names)} could not complete."
+                final_msg = f"Campaign failed in {elapsed}s: {', '.join(incomplete_names)} could not complete."
                 final_evt_type = "error"
-            elif failed_stages > 0:
+            elif failed_stages > 0 or partial_stages > 0:
                 camp_status = "Partially Completed"
                 scan_status = "partially_completed"
-                final_msg = f"Campaign partially completed in {elapsed}s ({failed_stages} stage failure/unavailability: {', '.join(failed_stage_names)})."
+                final_msg = (
+                    f"Campaign partially completed in {elapsed}s "
+                    f"(incomplete/failed stage(s): {', '.join(incomplete_names)}; Findings: {len(all_findings)})."
+                )
                 final_evt_type = "warning"
             else:
                 camp_status = "Completed"
@@ -714,6 +840,7 @@ class ExecutionManager:
                 "scanners_executed": list(dict.fromkeys(scanners_executed)),
                 "scanner_statuses": scanner_statuses,
                 "failed_stages": failed_stage_names,
+                "partial_stages": partial_stage_names,
                 "passive_results": passive_results,
                 "active_hosts": active_hosts,
                 "discovered_ports": discovered_ports
@@ -738,10 +865,29 @@ class ExecutionManager:
                     seaweed_fid=ev_res.get("seaweed_fid"),
                     seaweed_url=ev_res.get("seaweed_url"),
                     local_path=ev_res.get("local_path"),
-                    scan_id=ctx.scan_id
+                    scan_id=ctx.scan_id,
+                    scanner_source="FootprintIQ Pipeline Summary",
+                    target=ctx.target,
+                    content_type="application/json",
                 )
             except Exception as ev_err:
                 logger.warning(f"Results archival notice: {ev_err}")
+
+            # Collect truthful installed tool versions detected during this run
+            scanner_versions: Dict[str, str] = {}
+            try:
+                if hasattr(orchestrator, "nmap_collector"):
+                    nmap_caps = getattr(orchestrator.nmap_collector, "check_capabilities", lambda: {})()
+                    if isinstance(nmap_caps, dict) and nmap_caps.get("version"):
+                        scanner_versions["nmap"] = str(nmap_caps["version"])
+                if hasattr(orchestrator, "nuclei_collector"):
+                    nuc_ready = orchestrator.nuclei_collector.check_readiness()
+                    if isinstance(nuc_ready, dict) and nuc_ready.get("version"):
+                        scanner_versions["nuclei"] = str(nuc_ready["version"])
+                if hasattr(orchestrator, "nessus_collector") and "Tenable Nessus" in str(scanner_statuses):
+                    scanner_versions["nessus"] = "Nessus REST API"
+            except Exception:
+                pass
 
             self._emit_event(
                 ctx,
@@ -757,7 +903,8 @@ class ExecutionManager:
                 scan_id=ctx.scan_id,
                 status=scan_status,
                 error_message="; ".join(failed_stage_names) if failed_stage_names else None,
-                result_summary_json=json.dumps(summary_bundle)
+                result_summary_json=json.dumps(summary_bundle),
+                scanner_versions_json=json.dumps(scanner_versions) if scanner_versions else None,
             )
             # Synthesize & archive Investigation Entity Graph + Maltego compatibility bundle
             try:
@@ -812,10 +959,10 @@ class ExecutionManager:
         ctx.cancel_requested.set()
         return True
 
-    def get_scan_context(self, recon_id: str) -> Optional[ScanJobContext]:
-        scan_id = self.recon_to_scan.get(recon_id)
-        if scan_id and scan_id in self.active_jobs:
-            return self.active_jobs[scan_id]
+    def get_scan_context(self, recon_id: str, scan_id: Optional[str] = None) -> Optional[ScanJobContext]:
+        target_scan_id = scan_id or self.recon_to_scan.get(recon_id)
+        if target_scan_id and target_scan_id in self.active_jobs:
+            return self.active_jobs[target_scan_id]
         return None
 
     def build_live_snapshot(
@@ -824,10 +971,14 @@ class ExecutionManager:
         campaign: Optional[Dict[str, Any]],
         scans: Optional[List[Dict[str, Any]]],
         bundle: Dict[str, Any],
+        scan_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Builds a unified live telemetry snapshot from memory context or persisted scan bundle."""
-        ctx_obj = self.get_scan_context(recon_id)
-        latest_scan = scans[0] if scans else None
+        ctx_obj = self.get_scan_context(recon_id, scan_id=scan_id)
+        selected_scan = None
+        if scan_id and scans:
+            selected_scan = next((s for s in scans if s.get("scan_id") == scan_id), None)
+        latest_scan = selected_scan or (scans[0] if scans else None)
         camp = campaign or {}
         elapsed_seconds = getattr(ctx_obj, "elapsed_seconds", None) if ctx_obj else None
         if elapsed_seconds is None and latest_scan and latest_scan.get("result_summary_json"):
@@ -852,12 +1003,17 @@ class ExecutionManager:
         else:
             pending_checks = 0
 
+        start_iso = (
+            getattr(ctx_obj, "start_time_utc", None)
+            or (latest_scan.get("started_at") if latest_scan else None)
+            or camp.get("updated_at")
+        )
         return {
-            "start_time_utc": (
-                getattr(ctx_obj, "start_time_utc", None)
-                or (latest_scan.get("started_at") if latest_scan else None)
-                or camp.get("updated_at")
-            ),
+            "start_time_utc": start_iso,
+            "start_time_ist": format_ist(start_iso),
+            "scan_id": latest_scan.get("scan_id") if latest_scan else None,
+            "run_number": latest_scan.get("run_number") if latest_scan else None,
+            "run_label": latest_scan.get("run_label") if latest_scan else None,
             "current_scanner": (
                 getattr(ctx_obj, "current_scanner", None)
                 or camp.get("current_stage")

@@ -26,8 +26,10 @@ from src.services.scan_options_service import ScanOptionsService
 from src.services.recon_results_helper import load_campaign_results_bundle, enrich_findings_with_explanations
 from src.services.report_analysis_service import (
     REPORTS_DIR as ANALYSIS_REPORTS_DIR,
+    build_investigation_report_filename,
     build_report_analysis,
     extract_report_file_metadata,
+    normalize_report_type_tag,
     resolve_report_record,
 )
 from src.services.rbac_service import (
@@ -42,6 +44,12 @@ from src.services.rbac_service import (
 )
 from src.authorization.target_authorizer import TargetAuthorizer
 from src.orchestration.execution_manager import ExecutionManager
+from src.utils.timezone import (
+    duration_human,
+    format_ist,
+    format_ist_date,
+    format_ist_short,
+)
 from src.api.dependencies import (
     CSRF_COOKIE_NAME,
     UIAccessDeniedException,
@@ -56,6 +64,11 @@ TEMPLATES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 REPORTS_DIR = ANALYSIS_REPORTS_DIR
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+templates.env.filters["ist"] = format_ist
+templates.env.filters["ist_short"] = format_ist_short
+templates.env.filters["ist_date"] = format_ist_date
+templates.env.filters["duration_fmt"] = lambda s: duration_human(None, None, s)
+templates.env.filters["basename"] = lambda p: os.path.basename(str(p or ""))
 
 router = APIRouter(include_in_schema=False)
 
@@ -104,26 +117,33 @@ def _enforce_ui_investigation_access(
 def _get_existing_reports(
     repo: Optional[FootprintIQRepository] = None,
     accessible_ids: Optional[Set[str]] = None,
+    scan_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     db_by_file: Dict[str, Dict[str, Any]] = {}
     if repo is not None:
         try:
-            for r in repo.list_report_records():
+            for r in repo.list_report_records(scan_id=scan_id):
                 db_by_file[r["file_name"]] = r
         except Exception:
             pass
 
+    inv_name_cache: Dict[str, str] = {}
     reports: List[Dict[str, Any]] = []
     if os.path.exists(REPORTS_DIR):
-        for f in sorted(os.listdir(REPORTS_DIR), reverse=True):
-            if not f.endswith(".pdf"):
-                continue
+        files_sorted = sorted(
+            [fn for fn in os.listdir(REPORTS_DIR) if fn.endswith(".pdf")],
+            key=lambda fn: os.path.getmtime(os.path.join(REPORTS_DIR, fn)),
+            reverse=True,
+        )
+        for f in files_sorted:
             full_path = os.path.join(REPORTS_DIR, f)
             if not os.path.isfile(full_path):
                 continue
             stat = os.stat(full_path)
             meta = extract_report_file_metadata(f)
             db_rec = db_by_file.get(f)
+            if scan_id and (not db_rec or db_rec.get("scan_id") != scan_id):
+                continue
             fmt = (db_rec.get("report_type") if db_rec else None) or meta["report_format"]
             inv_id = (
                 (db_rec.get("recon_id") if db_rec else None)
@@ -132,18 +152,39 @@ def _get_existing_reports(
             )
             if accessible_ids is not None and inv_id not in accessible_ids:
                 continue
+
+            inv_name = (db_rec.get("investigation_name") if db_rec else None)
+            if not inv_name and repo is not None and inv_id and inv_id != "UNKNOWN":
+                if inv_id not in inv_name_cache:
+                    c = repo.get_recon_campaign(inv_id)
+                    i = repo.get_investigation(inv_id) if not c else None
+                    inv_name_cache[inv_id] = (c.get("name") if c else None) or (i.get("title") if i else None) or inv_id
+                inv_name = inv_name_cache[inv_id]
+
             report_key = (db_rec.get("report_id") if db_rec else None) or f
+            run_num = db_rec.get("run_number") if db_rec else None
+            run_label = f"Run {int(run_num):03d}" if run_num is not None else ((db_rec.get("scan_id") if db_rec else None) or "Legacy / Full Scope")
+            created_iso = (db_rec.get("generated_at") if db_rec else None) or datetime.fromtimestamp(stat.st_mtime).isoformat()
             reports.append({
                 "report_id": db_rec.get("report_id") if db_rec else None,
                 "report_key": report_key,
+                "report_name": f,
                 "file_name": f,
                 "investigation_id": inv_id,
+                "investigation_name": inv_name or inv_id,
+                "scan_id": db_rec.get("scan_id") if db_rec else None,
+                "run_number": int(run_num) if run_num is not None else None,
+                "run_label": run_label,
+                "scan_type": (db_rec.get("scan_type") if db_rec else None) or fmt.lower(),
+                "report_status": (db_rec.get("report_status") if db_rec else None) or "completed",
                 "report_format": fmt.lower(),
                 "file_size": stat.st_size,
+                "sha256_hash": db_rec.get("sha256_hash") if db_rec else None,
                 "generated_by_username": db_rec.get("generated_by_username") if db_rec else None,
-                "created_at": (db_rec.get("generated_at") if db_rec else None) or datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at": created_iso,
+                "created_at_ist": format_ist(created_iso),
                 "analysis_url": f"/reports/{report_key}",
-                "download_url": f"/api/v1/reports/{f}/download?investigation_id={inv_id}",
+                "download_url": f"/api/v1/reports/{report_key}/download?investigation_id={inv_id}",
             })
     return reports
 
@@ -160,12 +201,16 @@ def _ui_ctx(
         or (current_user or {}).get("csrf_token")
         or ""
     )
+    user_theme = (current_user or {}).get("theme_preference") or "light"
+    display_tz = (current_user or {}).get("timezone_preference") or "Asia/Kolkata"
     return {
         "active_page": active_page,
         "current_user": current_user,
         "is_admin": role == ROLE_ADMIN,
         "is_investigator": role == ROLE_INVESTIGATOR,
         "csrf_token": csrf_token,
+        "user_theme": user_theme,
+        "display_timezone": display_tz,
         **extra,
     }
 
@@ -310,6 +355,7 @@ def view_recon_workspace(
     recon_id: str,
     request: Request,
     created: Optional[str] = None,
+    run_new: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(require_investigator_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
@@ -319,6 +365,8 @@ def view_recon_workspace(
     if not repo.get_recon_campaign(recon_id):
         raise HTTPException(status_code=404, detail=f"Recon Campaign '{recon_id}' not found.")
 
+    runs = repo.list_scans(investigation_id=recon_id)
+    next_run_num = max([int(r.get("run_number") or 0) for r in runs], default=0) + 1
     profiles = repo.list_saved_scan_profiles()
     options_catalog = ScanOptionsService.get_full_catalog()
     return templates.TemplateResponse(
@@ -330,6 +378,9 @@ def view_recon_workspace(
             request=request,
             campaign=campaign,
             recon_id=recon_id,
+            runs=runs,
+            next_run_number=next_run_num,
+            run_new=(run_new == "1" or run_new == "true" or bool(runs)),
             profiles=profiles,
             options_catalog=options_catalog,
             created=(created == "1" or created == "true"),
@@ -361,6 +412,7 @@ def view_recon_detail(
 def view_recon_live(
     recon_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
@@ -369,10 +421,19 @@ def view_recon_live(
         raise HTTPException(status_code=404, detail=f"Recon Campaign '{recon_id}' not found.")
 
     scans = repo.list_scans(investigation_id=recon_id)
-    findings = repo.list_findings(investigation_id=recon_id)
-    latest_scan = scans[0] if scans else None
-    bundle = load_campaign_results_bundle(recon_id, repo)
-    evidence = repo.list_evidence(investigation_id=recon_id)
+    selected_scan = None
+    if scan_id:
+        cand = repo.get_scan(scan_id)
+        if cand and (cand.get("recon_id") == recon_id or cand.get("investigation_id") == recon_id):
+            selected_scan = cand
+    if not selected_scan and scans:
+        selected_scan = sorted(scans, key=lambda s: (int(s.get("run_number") or 0), s.get("created_at") or ""), reverse=True)[0]
+    eff_scan_id = selected_scan.get("scan_id") if selected_scan else None
+
+    findings = repo.list_findings(investigation_id=recon_id, scan_id=eff_scan_id)
+    latest_scan = selected_scan or (scans[0] if scans else None)
+    bundle = load_campaign_results_bundle(recon_id, repo, scan_id=eff_scan_id)
+    evidence = repo.list_evidence(investigation_id=recon_id, scan_id=eff_scan_id)
 
     nessus_status = "Unavailable"
     try:
@@ -395,9 +456,10 @@ def view_recon_live(
     except Exception:
         pass
 
-    live_ctx = ExecutionManager(repo=repo).build_live_snapshot(recon_id, campaign, scans, bundle)
+    live_ctx = ExecutionManager(repo=repo).build_live_snapshot(recon_id, campaign, scans, bundle, scan_id=eff_scan_id)
     try:
-        parsed_cfg = json.loads(campaign.get("scan_config_json") or "{}")
+        raw_cfg = (selected_scan.get("scan_config_json") if selected_scan and selected_scan.get("scan_config_json") else None) or campaign.get("scan_config_json") or "{}"
+        parsed_cfg = json.loads(raw_cfg) if isinstance(raw_cfg, str) else (raw_cfg or {})
     except Exception:
         parsed_cfg = {}
     selected_cats = parsed_cfg.get("selected_categories") or ([campaign.get("selected_scan_types")] if campaign.get("selected_scan_types") else [])
@@ -413,6 +475,7 @@ def view_recon_live(
             recon_id=recon_id,
             scans=scans,
             latest_scan=latest_scan,
+            selected_scan=selected_scan,
             findings=findings,
             findings_count=len(findings),
             initial_events=bundle["events"],
@@ -433,6 +496,7 @@ def view_recon_live(
 def view_recon_results(
     recon_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
@@ -441,13 +505,48 @@ def view_recon_results(
         raise HTTPException(status_code=404, detail=f"Recon Campaign '{recon_id}' not found.")
 
     accessible = filter_accessible_investigation_ids(repo, current_user)
-    findings = repo.list_findings(investigation_id=recon_id)
+    raw_scans = repo.list_scans(investigation_id=recon_id)
+    ordered_scans = sorted(
+        raw_scans,
+        key=lambda s: (int(s.get("run_number") or 0), s.get("created_at") or ""),
+        reverse=True,
+    )
+    all_inv_findings = repo.list_findings(investigation_id=recon_id)
+    all_inv_evidence = repo.list_evidence(investigation_id=recon_id)
+    all_inv_reports = _get_existing_reports(repo, accessible_ids={recon_id})
+
+    selected_scan = None
+    eff_scan_id: Optional[str] = None
+    if scan_id and scan_id != "all":
+        cand = repo.get_scan(scan_id)
+        if cand and (cand.get("recon_id") == recon_id or cand.get("investigation_id") == recon_id):
+            selected_scan = cand
+            eff_scan_id = cand.get("scan_id")
+
+    # Annotate each run with per-run counts & IST timings for Scan History table
+    users_by_id = {u.get("id"): u.get("username") for u in repo.list_users() if u.get("id") is not None}
+    enriched_scans: List[Dict[str, Any]] = []
+    for s in ordered_scans:
+        sid = s.get("scan_id")
+        s_findings = [f for f in all_inv_findings if f.get("scan_id") == sid]
+        s_ev = [e for e in all_inv_evidence if e.get("scan_id") == sid]
+        s_rep = [r for r in all_inv_reports if r.get("scan_id") == sid]
+        s_copy = dict(s)
+        s_copy["findings_count"] = len(s_findings)
+        s_copy["evidence_count"] = len(s_ev)
+        s_copy["reports_count"] = len(s_rep)
+        s_copy["initiator_username"] = users_by_id.get(s.get("initiated_by")) or "investigator"
+        s_copy["started_at_ist"] = s.get("started_at_ist") or format_ist(s.get("started_at") or s.get("created_at"))
+        s_copy["completed_at_ist"] = s.get("completed_at_ist") or (format_ist(s.get("completed_at")) if s.get("completed_at") else None)
+        s_copy["duration_display"] = duration_human(s.get("started_at"), s.get("completed_at"), s.get("duration_seconds"))
+        enriched_scans.append(s_copy)
+
+    findings = repo.list_findings(investigation_id=recon_id, scan_id=eff_scan_id)
     explained_findings = enrich_findings_with_explanations(findings)
     exposure_summary = ExposureScoringEngine.calculate_investigation_exposure(findings)
     all_campaigns = _filter_scoped_list(repo.list_recon_campaigns(), accessible, "recon_id", "investigation_id")
-    scans = repo.list_scans(investigation_id=recon_id)
-    bundle = load_campaign_results_bundle(recon_id, repo)
-    campaign_reports = _get_existing_reports(repo, accessible_ids={recon_id})
+    bundle = load_campaign_results_bundle(recon_id, repo, scan_id=eff_scan_id)
+    campaign_reports = [r for r in all_inv_reports if not eff_scan_id or r.get("scan_id") == eff_scan_id]
 
     return templates.TemplateResponse(
         request=request,
@@ -460,7 +559,9 @@ def view_recon_results(
             recon_id=recon_id,
             findings=findings,
             explained_findings=explained_findings,
-            scans=scans,
+            scans=enriched_scans,
+            selected_scan=selected_scan,
+            selected_scan_id=eff_scan_id or "all",
             exposure=exposure_summary,
             all_campaigns=all_campaigns,
             passive_results=bundle["passive_results"],
@@ -469,6 +570,7 @@ def view_recon_results(
             scanner_statuses=bundle["scanner_statuses"],
             failed_stages=bundle["failed_stages"],
             reports=campaign_reports,
+            all_campaign_reports=all_inv_reports,
         ),
     )
 
@@ -478,13 +580,14 @@ def download_recon_pdf(
     recon_id: str,
     request: Request,
     format: str = "technical",
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
     """
-    One-click download for Executive/Technical PDFs.
-    - Investigators (owner/shared): compile & persist fresh PDF with integrated Report Analysis.
-    - Administrators (read-only): download latest existing PDF for the campaign if present; blocked (403) from generating new ones.
+    One-click download for investigation-named PDFs.
+    - Investigators (owner/shared): compile & persist fresh PDF scoped cleanly to selected scan run (or latest).
+    - Administrators (read-only): download latest existing PDF for the campaign/run if present; blocked (403) from generating new ones.
     """
     from src.reporting.unified_report import UnifiedReportGenerator
 
@@ -499,10 +602,10 @@ def download_recon_pdf(
     if not repo.get_recon_campaign(recon_id):
         raise HTTPException(status_code=404, detail=f"Recon Campaign '{recon_id}' not found.")
 
+    norm_fmt = normalize_report_type_tag(format)
     if is_admin_user(current_user):
-        existing = _get_existing_reports(repo, accessible_ids={recon_id})
-        req_fmt = (format or "technical").lower()
-        fmt_matches = [r for r in existing if (r.get("report_format") or "").lower() == req_fmt]
+        existing = _get_existing_reports(repo, accessible_ids={recon_id}, scan_id=scan_id)
+        fmt_matches = [r for r in existing if (r.get("report_format") or "").lower() == norm_fmt]
         target_rec = fmt_matches[0] if fmt_matches else (existing[0] if existing else None)
         if not target_rec:
             record_security_audit(
@@ -527,13 +630,27 @@ def download_recon_pdf(
             user=current_user,
             action="REPORT_DOWNLOADED",
             target_resource=str(target_rec.get("report_id") or target_rec["file_name"]),
-            details={"investigation_id": recon_id},
+            details={"investigation_id": recon_id, "scan_id": scan_id},
             outcome="SUCCESS",
             request=request,
         )
         return FileResponse(path=pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
 
     # Investigator execution path
+    all_scans = repo.list_scans(investigation_id=recon_id)
+    selected_scan = None
+    if scan_id:
+        cand = repo.get_scan(scan_id)
+        if cand and (cand.get("recon_id") == recon_id or cand.get("investigation_id") == recon_id):
+            selected_scan = cand
+    elif all_scans:
+        selected_scan = sorted(
+            all_scans,
+            key=lambda s: (int(s.get("run_number") or 0), s.get("created_at") or ""),
+            reverse=True,
+        )[0]
+    eff_scan_id = selected_scan.get("scan_id") if selected_scan else None
+
     inv = {
         "investigation_id": campaign["recon_id"],
         "recon_id": campaign["recon_id"],
@@ -541,13 +658,13 @@ def download_recon_pdf(
         "name": campaign["name"],
         "purpose": campaign.get("purpose", "Security Assessment"),
         "description": campaign.get("description", ""),
-        "status": campaign.get("status", "Completed"),
+        "status": (selected_scan.get("status") if selected_scan else None) or campaign.get("status", "Completed"),
         "target_value": campaign.get("target_value", ""),
         "target_type": campaign.get("target_type", "ipv4"),
         "scope_description": campaign.get("scope_description", ""),
         "excluded_targets": campaign.get("excluded_targets", ""),
-        "selected_scan_types": campaign.get("selected_scan_types", ""),
-        "scan_config_json": campaign.get("scan_config_json", "{}"),
+        "selected_scan_types": (selected_scan.get("scan_type") if selected_scan else None) or campaign.get("selected_scan_types", ""),
+        "scan_config_json": (selected_scan.get("scan_config_json") if selected_scan else None) or campaign.get("scan_config_json", "{}"),
         "created_at": campaign.get("created_at"),
     }
     targets = repo.list_authorized_targets(recon_id)
@@ -559,17 +676,34 @@ def download_recon_pdf(
             "scope": campaign.get("scope_description") or "Authorized Scope",
             "permitted_profiles": "lab-basic",
         }]
-    findings = repo.list_findings(recon_id)
-    evidence = repo.list_evidence(recon_id)
-    bundle = load_campaign_results_bundle(recon_id, repo)
+    findings = repo.list_findings(recon_id, scan_id=eff_scan_id)
+    evidence = repo.list_evidence(recon_id, scan_id=eff_scan_id)
+    bundle = load_campaign_results_bundle(recon_id, repo, scan_id=eff_scan_id)
     analysis = build_report_analysis(
         recon_id,
         repo,
+        report_meta={
+            "investigation_id": recon_id,
+            "recon_id": recon_id,
+            "investigation_name": campaign["name"],
+            "scan_id": eff_scan_id,
+            "run_number": selected_scan.get("run_number") if selected_scan else None,
+            "report_format": norm_fmt,
+        },
         findings_override=findings,
         targets_override=targets,
         evidence_override=evidence,
         results_bundle_override=bundle,
+        scan_id=eff_scan_id,
     )
+
+    out_name = build_investigation_report_filename(
+        campaign["name"],
+        norm_fmt,
+        reports_dir=REPORTS_DIR,
+        run_number=selected_scan.get("run_number") if selected_scan else None,
+    )
+    out_path = os.path.join(REPORTS_DIR, out_name)
 
     generator = UnifiedReportGenerator()
     pdf_path = generator.generate_pdf_report(
@@ -577,32 +711,43 @@ def download_recon_pdf(
         targets=targets,
         findings=findings,
         evidence=evidence,
-        report_format=format,
+        output_path=out_path,
+        report_format=norm_fmt,
         results_bundle=bundle,
         analysis=analysis,
         generated_by=current_user.get("username"),
+        scan_run=selected_scan,
     )
 
     try:
         fsize = os.path.getsize(pdf_path)
         with open(pdf_path, "rb") as pf:
             sha = hashlib.sha256(pf.read()).hexdigest()
+        is_complete = (analysis.get("assessment_limitations") or {}).get("is_complete", True)
+        rep_status = "completed" if is_complete else "partial"
+        if not findings and not (bundle.get("passive_results") or bundle.get("discovered_ports")):
+            rep_status = "empty" if is_complete else "partial"
         rec = repo.add_report_record(
             investigation_id=recon_id,
             recon_id=recon_id,
             file_name=os.path.basename(pdf_path),
             file_size=fsize,
             sha256_hash=sha,
-            report_type=format.lower(),
+            report_type=norm_fmt,
             generated_by_user_id=current_user.get("id"),
             generated_by_username=current_user.get("username"),
+            scan_id=eff_scan_id,
+            run_number=selected_scan.get("run_number") if selected_scan else None,
+            scan_type=(selected_scan.get("scan_type") if selected_scan else None) or campaign.get("selected_scan_types") or norm_fmt,
+            investigation_name=campaign["name"],
+            report_status=rep_status,
         )
         record_security_audit(
             repo,
             user=current_user,
             action="REPORT_GENERATED",
             target_resource=str(rec.get("report_id") or os.path.basename(pdf_path)),
-            details={"investigation_id": recon_id, "report_format": format.lower()},
+            details={"investigation_id": recon_id, "scan_id": eff_scan_id, "report_format": norm_fmt},
             outcome="SUCCESS",
             request=request,
         )
@@ -691,11 +836,45 @@ def view_findings(
 @router.get("/evidence", response_class=HTMLResponse)
 def view_evidence(
     request: Request,
+    investigation_id: Optional[str] = None,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
     accessible = filter_accessible_investigation_ids(repo, current_user)
-    evidence = _filter_scoped_list(repo.list_evidence(), accessible, "investigation_id", "recon_id")
+    raw_evidence = repo.list_evidence(investigation_id=investigation_id, scan_id=scan_id)
+    evidence = _filter_scoped_list(raw_evidence, accessible, "investigation_id", "recon_id")
+    campaigns = _filter_scoped_list(repo.list_recon_campaigns(), accessible, "recon_id", "investigation_id")
+    scans = _filter_scoped_list(repo.list_scans(), accessible, "investigation_id", "recon_id")
+
+    inv_names = {c.get("recon_id"): c.get("name") for c in campaigns if c.get("recon_id")}
+    for inv in _filter_scoped_list(repo.list_investigations(), accessible, "investigation_id"):
+        inv_names.setdefault(inv.get("investigation_id"), inv.get("title"))
+    scan_map = {s.get("scan_id"): s for s in scans if s.get("scan_id")}
+
+    enriched_evidence: List[Dict[str, Any]] = []
+    for e in reversed(evidence):
+        item = dict(e)
+        iid = e.get("investigation_id")
+        sid = e.get("scan_id")
+        s_info = scan_map.get(sid) or {}
+        r_num = s_info.get("run_number")
+        item["investigation_name"] = inv_names.get(iid) or iid or "Unknown"
+        item["run_label"] = f"Run {int(r_num):03d}" if r_num is not None else (sid or "Unlinked")
+        item["created_at_ist"] = e.get("created_at_ist") or format_ist(e.get("created_at"))
+        fid = str(e.get("seaweed_fid") or "")
+        lpath = str(e.get("local_path") or "")
+        has_local = bool(lpath and os.path.isfile(lpath))
+        has_remote = bool(fid and not fid.startswith("local-"))
+        item["storage_status"] = (
+            "SeaweedFS + Local" if (has_remote and has_local)
+            else "SeaweedFS Archived" if has_remote
+            else "Local Vault" if has_local
+            else "Archived Reference" if fid
+            else "Missing"
+        )
+        enriched_evidence.append(item)
+
     return templates.TemplateResponse(
         request=request,
         name="evidence.html",
@@ -703,8 +882,12 @@ def view_evidence(
             "evidence",
             current_user,
             request=request,
-            evidence=list(reversed(evidence)),
-            total_evidence=len(evidence),
+            evidence=enriched_evidence,
+            total_evidence=len(enriched_evidence),
+            campaigns=campaigns,
+            scans=scans,
+            preselect_inv=investigation_id or "",
+            preselect_scan=scan_id or "",
         ),
     )
 
@@ -712,6 +895,8 @@ def view_evidence(
 @router.get("/reports", response_class=HTMLResponse)
 def view_reports(
     request: Request,
+    investigation_id: Optional[str] = None,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
@@ -720,6 +905,25 @@ def view_reports(
     campaigns = _filter_scoped_list(repo.list_recon_campaigns(), accessible, "recon_id", "investigation_id")
     reports = _get_existing_reports(repo, accessible_ids=accessible)
     findings = _filter_scoped_list(repo.list_findings(), accessible, "investigation_id", "recon_id")
+    all_scans = _filter_scoped_list(repo.list_scans(), accessible, "investigation_id", "recon_id")
+
+    scans_by_recon: Dict[str, List[Dict[str, Any]]] = {}
+    for s in sorted(all_scans, key=lambda x: (int(x.get("run_number") or 0), x.get("created_at") or ""), reverse=True):
+        rk = s.get("recon_id") or s.get("investigation_id")
+        if not rk:
+            continue
+        r_num = int(s.get("run_number") or 1)
+        s_findings = [f for f in findings if f.get("scan_id") == s.get("scan_id")]
+        scans_by_recon.setdefault(rk, []).append({
+            "scan_id": s.get("scan_id"),
+            "run_number": r_num,
+            "run_label": s.get("run_label") or f"Run {r_num:03d}",
+            "scan_type": s.get("scan_type") or "Security Scan",
+            "status": s.get("status") or "Unknown",
+            "findings_count": len(s_findings),
+            "started_at_ist": s.get("started_at_ist") or format_ist(s.get("started_at") or s.get("created_at")),
+        })
+
     return templates.TemplateResponse(
         request=request,
         name="reports.html",
@@ -731,6 +935,9 @@ def view_reports(
             campaigns=campaigns,
             reports=reports,
             total_findings=len(findings),
+            scans_by_recon=scans_by_recon,
+            preselect_inv=investigation_id or "",
+            preselect_scan=scan_id or "",
         ),
     )
 
@@ -739,10 +946,11 @@ def view_reports(
 def view_report_detail_analysis(
     report_id: str,
     request: Request,
+    scan_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user_ui),
     repo: FootprintIQRepository = Depends(get_repository),
 ):
-    """Integrated Report Details & Analyse Report view (RBAC & ownership enforced)."""
+    """Integrated Report Details & Interactive Analyse Report view (RBAC & ownership enforced)."""
     report_meta = resolve_report_record(report_id, repo)
     if not report_meta:
         raise HTTPException(status_code=404, detail=f"Report '{os.path.basename(report_id)}' not found.")
@@ -753,13 +961,14 @@ def view_report_detail_analysis(
     elif not is_admin_user(current_user):
         raise UIAccessDeniedException("Access denied to legacy unowned report.", user=current_user)
 
-    analysis = build_report_analysis(inv_id, repo, report_meta=report_meta)
+    eff_scan_id = scan_id or report_meta.get("scan_id")
+    analysis = build_report_analysis(inv_id, repo, report_meta=report_meta, scan_id=eff_scan_id)
     record_security_audit(
         repo,
         user=current_user,
         action="REPORT_ANALYZED",
         target_resource=str(report_meta.get("report_id") or report_meta.get("file_name")),
-        details={"investigation_id": inv_id, "source": "ui"},
+        details={"investigation_id": inv_id, "scan_id": eff_scan_id, "source": "ui"},
         outcome="SUCCESS",
         request=request,
     )
@@ -803,10 +1012,38 @@ def view_settings(
         "authorized_domains_count": len(raw_scope.get("authorized_domains") or []),
         "public_ips_restricted": not raw_scope.get("allow_public_ips", False),
     }
+    activity_logs = repo.list_user_activity_logs(user_id=current_user.get("id"), limit=50)
+    accessible = filter_accessible_investigation_ids(repo, current_user)
+    my_investigations = _filter_scoped_list(repo.list_recon_campaigns(), accessible, "recon_id", "investigation_id")
+    my_reports = _get_existing_reports(repo, accessible_ids=accessible)
+
+    user_profile = {
+        "user_id": current_user.get("id"),
+        "username": current_user.get("username"),
+        "full_name": current_user.get("full_name") or current_user.get("username"),
+        "email": current_user.get("email"),
+        "role": current_user.get("role"),
+        "is_active": current_user.get("is_active", True),
+        "is_approved": current_user.get("is_approved", True),
+        "theme_preference": current_user.get("theme_preference") or "light",
+        "timezone_preference": current_user.get("timezone_preference") or "Asia/Kolkata",
+        "notification_preferences": current_user.get("notification_preferences") or {},
+        "created_at_ist": current_user.get("created_at_ist") or format_ist(current_user.get("created_at")),
+        "last_login_ist": current_user.get("last_login_ist") or format_ist(current_user.get("last_login_at")),
+        "investigations_count": len(my_investigations),
+        "reports_count": len(my_reports),
+    }
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
-        context=_ui_ctx("settings", current_user, request=request, scope_summary=sanitized_scope),
+        context=_ui_ctx(
+            "settings",
+            current_user,
+            request=request,
+            scope_summary=sanitized_scope,
+            user_profile=user_profile,
+            activity_logs=activity_logs,
+        ),
     )
 
 

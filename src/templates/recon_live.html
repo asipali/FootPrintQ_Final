@@ -15,6 +15,11 @@
           <span class="mono px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-200">
             {{ recon_id }}
           </span>
+          {% if selected_scan %}
+          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+            {{ selected_scan.run_label or ('Run ' ~ '%03d'|format(selected_scan.run_number or 1)) }}
+          </span>
+          {% endif %}
           <span id="liveStatusPill" class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-blue-100 text-blue-800">
             {{ campaign.status }}
           </span>
@@ -44,7 +49,7 @@
           Cancel Scan
         </button>
         {% endif %}
-        <a href="/recon/{{ recon_id }}/results"
+        <a href="/recon/{{ recon_id }}/results{% if selected_scan %}?scan_id={{ selected_scan.scan_id }}{% endif %}"
            class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg shadow-sm transition">
           View Results Dashboard &rarr;
         </a>
@@ -66,8 +71,8 @@
         <div id="liveCurrentScanner" class="font-semibold text-blue-700 truncate mt-0.5">{{ live_ctx.current_scanner if live_ctx else (campaign.current_stage or 'Ready') }}</div>
       </div>
       <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80">
-        <div class="text-[10px] font-bold text-slate-400 uppercase">Start Time</div>
-        <div class="mono text-[11px] font-semibold text-slate-700 truncate mt-0.5">{{ (live_ctx.start_time_utc[:19] ~ ' UTC') if (live_ctx and live_ctx.start_time_utc) else 'Not started' }}</div>
+        <div class="text-[10px] font-bold text-slate-400 uppercase">Start Time (IST)</div>
+        <div class="mono text-[11px] font-semibold text-slate-700 truncate mt-0.5">{{ (live_ctx.start_time_ist or (live_ctx.start_time_utc|ist)) if (live_ctx and (live_ctx.start_time_ist or live_ctx.start_time_utc)) else 'Not started' }}</div>
       </div>
       <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80">
         <div class="text-[10px] font-bold text-slate-400 uppercase">Completed Stages</div>
@@ -277,7 +282,8 @@
        'findings': findings or [],
        'scanner_statuses': scanner_statuses or [],
        'events': initial_events or [],
-       'live_ctx': live_ctx or {}
+       'live_ctx': live_ctx or {},
+       'scan_id': (selected_scan.scan_id if selected_scan else '')
      } | tojson | forceescape }}"></div>
 
 <script>
@@ -286,6 +292,8 @@ try {
   BOOT = JSON.parse((document.getElementById('fiqLiveBootstrap')?.dataset?.bootstrap) || '{}');
 } catch (_) { BOOT = {}; }
 const RECON_ID = BOOT.recon_id;
+const SCAN_ID = BOOT.scan_id || '';
+const SCAN_QS = SCAN_ID ? `?scan_id=${encodeURIComponent(SCAN_ID)}` : '';
 
 const liveState = {
   status: BOOT.status || 'Authorized',
@@ -507,7 +515,7 @@ function renderEventsFeed() {
     const borderCls = et === 'error' ? 'border-rose-200 bg-rose-50/50'
                     : (et === 'warning' ? 'border-amber-200 bg-amber-50/50'
                     : (et === 'finding_discovered' ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-slate-50/50'));
-    const ts = ev.timestamp ? String(ev.timestamp).slice(11, 19) : '';
+    const ts = ev.timestamp_ist || (ev.timestamp ? FIQ_FormatIST(ev.timestamp, true) : '');
     return `
       <div class="p-2.5 rounded-lg border ${borderCls} text-xs space-y-1">
         <div class="flex items-center justify-between text-[10px] text-slate-500">
@@ -595,7 +603,7 @@ function ingestEvent(ev) {
 
 async function refreshCampaignSnapshot() {
   try {
-    const res = await fetch(`/api/v1/recon/${encodeURIComponent(RECON_ID)}`);
+    const res = await fetch(`/api/v1/recon/${encodeURIComponent(RECON_ID)}${SCAN_QS}`);
     if (!res.ok) return;
     const data = await res.json();
     liveState.passiveResults = data.passive_results || liveState.passiveResults;
@@ -656,7 +664,7 @@ function connectLiveStream() {
   dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
   txt.textContent = 'Connecting...';
 
-  const es = new EventSource(`/api/v1/recon/${encodeURIComponent(RECON_ID)}/stream`);
+  const es = new EventSource(`/api/v1/recon/${encodeURIComponent(RECON_ID)}/stream${SCAN_QS}`);
   liveState.eventSource = es;
 
   es.onopen = () => {

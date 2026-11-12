@@ -343,7 +343,7 @@ class ScanOptionsService:
                     {"id": "web_enum", "label": "HTTP / Web Service Enumeration", "nse_scripts": ["http-title", "http-headers", "http-methods", "http-security-headers"], "available": nmap_ok},
                     {"id": "smb_enum", "label": "SMB Dialect, OS & Signing Audit", "nse_scripts": ["smb-os-discovery", "smb-security-mode"], "available": nmap_ok},
                     {"id": "ftp_enum", "label": "FTP Anonymous Access Check", "nse_scripts": ["ftp-anon"], "available": nmap_ok},
-                    {"id": "db_enum", "label": "Database Service Enumeration (MySQL/PostgreSQL)", "nse_scripts": ["mysql-info", "postgresql-info"], "available": nmap_ok},
+                    {"id": "db_enum", "label": "Database Service Enumeration (MySQL)", "nse_scripts": ["mysql-info"], "available": nmap_ok},
                     {"id": "dns_enum", "label": "DNS Service & Recursion Enumeration", "nse_scripts": ["dns-nsid", "dns-recursion"], "available": nmap_ok},
                     {"id": "ssl_enum", "label": "SSL/TLS Certificate & Cipher Enumeration", "nse_scripts": ["ssl-cert", "ssl-enum-ciphers"], "available": nmap_ok}
                 ]

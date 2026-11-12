@@ -4,6 +4,7 @@ Modern RESTful IP, ASN, and Domain registration data collector.
 Complements and enhances traditional WHOIS reconnaissance.
 """
 
+import ipaddress
 import logging
 from typing import Dict, Any, Optional
 import requests
@@ -20,18 +21,41 @@ class RDAPCollector:
     def lookup_ip(self, ip_address: str) -> Dict[str, Any]:
         """
         Queries RDAP for an IPv4 or IPv6 address.
+        Recognizes private/reserved/local address space cleanly without public RIR misattribution.
         """
-        # Handle private/lab IP addresses gracefully
-        if ip_address.startswith(("127.", "192.168.", "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.")):
-            return {
-                "status": "LOCAL_PRIVATE_IP",
-                "ip": ip_address,
-                "name": "Private/Local Address Space (RFC 1918)",
-                "cidr": f"{ip_address}/24",
-                "country": "LOCAL_LAB",
-                "org": "Internal Lab Environment",
-                "remarks": ["Private address range, RDAP queries are not sent to public RIRs."]
-            }
+        try:
+            ip_obj = ipaddress.ip_address(ip_address.strip())
+            cgnat = ipaddress.ip_network("100.64.0.0/10")
+            is_cgnat = isinstance(ip_obj, ipaddress.IPv4Address) and ip_obj in cgnat
+            if (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_reserved
+                or ip_obj.is_multicast
+                or is_cgnat
+            ):
+                if ip_obj.is_loopback:
+                    scope = "Loopback Address Space (RFC 1122)"
+                elif ip_obj.is_link_local:
+                    scope = "Link-Local Address Space (RFC 3927)"
+                elif is_cgnat:
+                    scope = "Carrier-Grade NAT Space (RFC 6598)"
+                else:
+                    scope = "Private / Internal Address Space (RFC 1918)"
+                return {
+                    "status": "LOCAL_PRIVATE_IP",
+                    "ip": ip_address,
+                    "name": scope,
+                    "scope": scope,
+                    "ownership_status": "Private / Unregistered Local Address Space",
+                    "cidr": str(ip_address),
+                    "country": "LOCAL",
+                    "org": "Private / Internal Lab Network (Not Publicly Assigned)",
+                    "remarks": [f"{scope}; public RIR RDAP queries were not sent."]
+                }
+        except ValueError:
+            pass
 
         url = f"https://rdap.arin.net/registry/ip/{ip_address}"
         try:

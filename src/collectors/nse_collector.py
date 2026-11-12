@@ -7,6 +7,7 @@ and preserves original XML evidence in SeaweedFS.
 
 import os
 import subprocess
+import time
 import logging
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional, Tuple
@@ -60,7 +61,34 @@ class NSECollector:
         if not approved_scripts:
             raise ValueError(f"No valid authorized scripts to execute. Rejected: {rejected_scripts}")
 
-        script_arg = ",".join(approved_scripts)
+        installed_scripts, missing_scripts = NSEPolicyService.filter_installed_scripts(approved_scripts)
+        skipped_scripts = [f"{s} (not installed in local Nmap scripts directory)" for s in missing_scripts]
+        if not installed_scripts:
+            return {
+                "status": "FAILED",
+                "target": target,
+                "executed_scripts": [],
+                "rejected_scripts": rejected_scripts,
+                "skipped_scripts": skipped_scripts,
+                "script_results_count": 0,
+                "vulnerabilities_found": 0,
+                "findings": [],
+                "script_results": [],
+                "evidence": {},
+                "raw_xml_path": None,
+                "errors": [f"Approved NSE scripts are missing on disk: {', '.join(missing_scripts)}"],
+                "execution_meta": {
+                    "scanner": "nmap_nse",
+                    "duration_seconds": 0.0,
+                    "returncode": None,
+                    "hosts_up": 0,
+                    "scripts_requested_count": len(approved_scripts),
+                    "scripts_executed_count": 0,
+                    "skipped_scripts": skipped_scripts,
+                },
+            }
+
+        script_arg = ",".join(installed_scripts)
 
         # 3. Construct safe Nmap command (Strictly shell=False)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -90,6 +118,7 @@ class NSECollector:
         cmd.append(target)
 
         logger.info(f"Executing NSE command: {' '.join(cmd)}")
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 cmd,
@@ -101,13 +130,16 @@ class NSECollector:
         except subprocess.TimeoutExpired:
             logger.error(f"NSE scan timed out after {self.timeout}s")
             raise TimeoutError(f"NSE scan timed out after {self.timeout}s")
+        duration_seconds = round(time.monotonic() - started, 2)
 
-        # 4. Parse XML output
+        # 4. Parse XML output and check Nmap XML runstats for script engine errors
         findings: List[Dict[str, Any]] = []
         script_results: List[Dict[str, Any]] = []
-
         errors: List[str] = []
+        xml_runstats = {"exit": None, "errormsg": None, "hosts_up": None}
+
         if os.path.exists(xml_path) and os.path.getsize(xml_path) > 0:
+            xml_runstats = self._extract_nse_runstats(xml_path)
             findings, script_results = self._parse_nse_xml(xml_path, target, investigation_id, scan_id)
 
             # 5. Preserve evidence in SeaweedFS
@@ -120,7 +152,20 @@ class NSECollector:
                 evidence_type="nse_xml",
                 content_type="application/xml"
             )
-            status = "COMPLETED" if result.returncode == 0 else "PARTIAL"
+            xml_error = xml_runstats.get("errormsg")
+            xml_failed = (xml_runstats.get("exit") == "error") or bool(xml_error)
+            stderr_clean = (getattr(result, "stderr", "") or "").strip()
+            if xml_error:
+                errors.append(xml_error)
+            elif result.returncode != 0 and stderr_clean:
+                errors.append(stderr_clean[:400])
+
+            if xml_failed or result.returncode != 0:
+                status = "PARTIAL" if findings else "FAILED"
+                if not errors:
+                    errors.append(f"Nmap NSE exited with status '{xml_runstats.get('exit') or result.returncode}'.")
+            else:
+                status = "COMPLETED"
         else:
             evidence_meta = {}
             status = "FAILED" if result.returncode != 0 else "COMPLETED"
@@ -128,11 +173,15 @@ class NSECollector:
                 err_msg = (result.stderr or "").strip() or f"Nmap NSE exited with code {result.returncode} and produced no XML output."
                 errors.append(err_msg)
 
+        if skipped_scripts:
+            logger.info(f"Skipped uninstalled NSE scripts: {', '.join(skipped_scripts)}")
+
         return {
             "status": status,
             "target": target,
-            "executed_scripts": approved_scripts,
+            "executed_scripts": installed_scripts,
             "rejected_scripts": rejected_scripts,
+            "skipped_scripts": skipped_scripts,
             "script_results_count": len(script_results),
             "vulnerabilities_found": len(findings),
             "findings": findings,
@@ -140,7 +189,38 @@ class NSECollector:
             "evidence": evidence_meta,
             "raw_xml_path": xml_path,
             "errors": errors,
+            "execution_meta": {
+                "scanner": "nmap_nse",
+                "duration_seconds": duration_seconds,
+                "returncode": result.returncode,
+                "xml_exit": xml_runstats.get("exit"),
+                "hosts_up": xml_runstats.get("hosts_up"),
+                "scripts_executed_count": len(installed_scripts),
+                "skipped_scripts": skipped_scripts,
+                "command_summary": f"nmap -sT -sV -Pn --script <{len(installed_scripts)} scripts>",
+                "stderr_excerpt": ((getattr(result, "stderr", "") or "").strip()[:300]) or None,
+            },
         }
+
+    @staticmethod
+    def _extract_nse_runstats(xml_path: str) -> Dict[str, Any]:
+        """Extracts <runstats> execution status, errormsg, and hosts-up count from NSE XML."""
+        info: Dict[str, Any] = {"exit": None, "errormsg": None, "hosts_up": None}
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+            fin = root.find("./runstats/finished")
+            if fin is not None:
+                info["exit"] = fin.get("exit")
+                err = fin.get("errormsg")
+                if err:
+                    info["errormsg"] = " ".join(err.strip().splitlines())[:400]
+            hosts_el = root.find("./runstats/hosts")
+            if hosts_el is not None and str(hosts_el.get("up", "")).isdigit():
+                info["hosts_up"] = int(hosts_el.get("up"))
+        except Exception:
+            pass
+        return info
 
     def _parse_nse_xml(
         self,
@@ -191,7 +271,8 @@ class NSECollector:
                                 severity = meta.get("severity", "High")
                                 title = meta.get("description", f"NSE Finding: {script_id}")
 
-                                fid = f"NSE-{target_ip.replace('.', '_')}-{port_id}-{script_id}"
+                                fid_seed = f"{investigation_id}|{scan_id or ''}|{target_ip}|{port_id}|{script_id}"
+                                fid = f"NSE-{hashlib.sha256(fid_seed.encode('utf-8')).hexdigest()[:10].upper()}"
                                 finding = {
                                     "finding_id": fid,
                                     "investigation_id": investigation_id,
@@ -230,8 +311,9 @@ class NSECollector:
                         })
                         meta = APPROVED_NSE_SCRIPTS.get(script_id, {})
                         if meta.get("category") == "vuln" or "VULNERABLE" in script_output.upper():
+                            h_seed = f"{investigation_id}|{scan_id or ''}|{target_ip}|host|{script_id}"
                             findings.append({
-                                "finding_id": f"NSE-{target_ip.replace('.', '_')}-host-{script_id}",
+                                "finding_id": f"NSE-{hashlib.sha256(h_seed.encode('utf-8')).hexdigest()[:10].upper()}",
                                 "investigation_id": investigation_id,
                                 "scan_id": scan_id,
                                 "target_ip": target_ip,

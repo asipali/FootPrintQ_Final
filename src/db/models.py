@@ -22,16 +22,23 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint("role IN ('admin', 'investigator')", name="chk_users_role"),
+        CheckConstraint("theme_preference IN ('light', 'dark', 'system')", name="chk_users_theme_preference"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     uuid = Column(String(36), default=lambda: str(uuid.uuid4()), unique=True, nullable=False, index=True)
     username = Column(String(100), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    full_name = Column(String(150), nullable=True)
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(50), default="investigator", nullable=False)  # 'admin', 'investigator'
     is_active = Column(Boolean, default=True, nullable=False)
     is_approved = Column(Boolean, default=False, nullable=False)  # Admin approval required
+    last_login_at = Column(DateTime, nullable=True)
+    theme_preference = Column(String(20), default="light", nullable=False)
+    timezone_preference = Column(String(64), default="Asia/Kolkata", nullable=False)
+    notification_preferences_json = Column(Text, nullable=True)
+    token_version = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -151,18 +158,28 @@ class ScanExecution(Base):
             "status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted', 'partially_completed')",
             name="chk_scan_executions_status"
         ),
+        Index("ix_scan_executions_inv_run", "investigation_id", "run_number"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     scan_id = Column(String(64), unique=True, nullable=False, index=True)  # e.g. "SCAN-20261110-12345"
     recon_id = Column(String(64), ForeignKey("recon_campaigns.recon_id", ondelete="SET NULL"), nullable=True, index=True)
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False)
+    run_number = Column(Integer, default=1, nullable=False)
     scan_type = Column(String(50), nullable=False)
     target = Column(String(255), nullable=False)
     profile = Column(String(100), default="default", nullable=False)
     status = Column(String(50), default="queued", nullable=False)
+    initiating_user_id = Column(Integer, ForeignKey("users.id", ondelete="NO ACTION"), nullable=True)
+    initiated_by = Column(String(100), nullable=True)
+    selected_scanners_json = Column(Text, nullable=True)
+    selected_components_json = Column(Text, nullable=True)
+    scan_config_json = Column(Text, nullable=True)
+    scanner_versions_json = Column(Text, nullable=True)
+    target_authorization_ref = Column(String(128), nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
     error_message = Column(Text, nullable=True)
     result_summary_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
@@ -228,6 +245,10 @@ class EvidenceRecord(Base):
     evidence_id = Column(String(64), unique=True, nullable=False, index=True)
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False)
     scan_execution_id = Column(Integer, ForeignKey("scan_executions.id", ondelete="SET NULL"), nullable=True)
+    scan_id = Column(String(64), nullable=True, index=True)
+    run_number = Column(Integer, nullable=True)
+    scanner_source = Column(String(64), nullable=True, index=True)
+    target = Column(String(255), nullable=True)
     evidence_type = Column(String(50), nullable=False)
     file_name = Column(String(255), nullable=False)
     file_size = Column(Integer, default=0, nullable=False)
@@ -249,9 +270,15 @@ class ReportRecord(Base):
     report_id = Column(String(64), unique=True, nullable=False, index=True)
     recon_id = Column(String(64), ForeignKey("recon_campaigns.recon_id", ondelete="SET NULL"), nullable=True, index=True)
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False)
+    scan_execution_id = Column(Integer, ForeignKey("scan_executions.id", ondelete="NO ACTION"), nullable=True)
+    scan_id = Column(String(64), nullable=True, index=True)
+    run_number = Column(Integer, nullable=True)
+    scan_type = Column(String(50), nullable=True)
+    investigation_name = Column(String(200), nullable=True)
     generated_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="NO ACTION"), nullable=True)
     generated_by_username = Column(String(100), nullable=True)
     report_type = Column(String(50), default="pdf", nullable=False)
+    report_status = Column(String(40), default="completed", nullable=False)
     file_name = Column(String(255), nullable=False)
     file_size = Column(Integer, default=0, nullable=False)
     sha256_hash = Column(String(64), nullable=False)

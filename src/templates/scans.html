@@ -123,7 +123,7 @@
                 {{ s.status }}
               </span>
             </td>
-            <td class="text-slate-500 text-xs">{{ s.started_at or '—' }}</td>
+            <td class="text-slate-500 text-xs">{{ s.started_at_ist or (s.started_at|ist) }}</td>
             <td class="text-slate-600 text-xs">
               {% if s.error_message %}
               <span class="text-rose-600 font-medium truncate block max-w-xs" title="{{ s.error_message }}">{{ s.error_message }}</span>

@@ -138,7 +138,7 @@
               <span class="font-extrabold text-xs text-slate-900">{{ i.exposure_score }}</span>
               <span class="text-[10px] text-slate-400">/ 100</span>
             </td>
-            <td class="text-slate-500 text-xs">{{ i.created_at[:10] }}</td>
+            <td class="text-slate-500 text-xs">{{ i.created_at|ist_short }}</td>
             <td class="space-x-2">
               <a href="/scans?investigation_id={{ i.investigation_id }}" class="text-blue-600 hover:text-blue-800 font-semibold text-xs">
                 Scan &rarr;

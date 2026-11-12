@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="fiq-csrf" content="{{ csrf_token or '' }}">
+  <meta name="fiq-theme-preference" content="{{ user_theme or 'light' }}">
+  <meta name="fiq-authenticated" content="{{ 'true' if current_user else 'false' }}">
   <title>{% block title %}FootprintIQ — Enterprise Reconnaissance &amp; Vulnerability Assessment{% endblock %}</title>
 
   <!-- Google Fonts: Inter & JetBrains Mono -->
@@ -18,6 +20,24 @@
 
   <!-- FootprintIQ Enterprise Stylesheet -->
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/themes.css">
+  <script src="/static/js/vendor/chart.umd.min.js"></script>
+  <script>
+    (function(){
+      try {
+        var isAuth = (document.querySelector('meta[name="fiq-authenticated"]') || {}).content === 'true';
+        var metaPref = (document.querySelector('meta[name="fiq-theme-preference"]') || {}).content || 'light';
+        var stored = localStorage.getItem('fiq_theme');
+        var pref = isAuth ? (metaPref === 'dark' || metaPref === 'system' ? metaPref : 'light') : ((stored === 'dark' || stored === 'light') ? stored : 'light');
+        if (isAuth) {
+          localStorage.setItem('fiq_theme', pref);
+        }
+        var eff = (pref === 'dark') ? 'dark' : ((pref === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', eff);
+        document.documentElement.setAttribute('data-theme-pref', pref);
+      } catch(e) {}
+    })();
+  </script>
 </head>
 <body class="h-full flex overflow-hidden text-slate-800 antialiased bg-slate-50">
 
@@ -193,7 +213,15 @@
       </div>
 
       {% if current_user %}
-      <div class="flex items-center space-x-3">
+      <div class="flex items-center space-x-2.5">
+        <span class="hidden md:inline-flex items-center px-2 py-1 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200" title="All timestamps rendered in Indian Standard Time (UTC+05:30)">
+          IST &bull; Asia/Kolkata
+        </span>
+        <button type="button" data-fiq-theme-toggle aria-pressed="false"
+                class="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+          <i data-lucide="moon" class="w-3.5 h-3.5"></i>
+          <span data-fiq-theme-label>Light</span>
+        </button>
         <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide {% if is_admin %}bg-indigo-50 text-indigo-700 border border-indigo-200{% else %}bg-emerald-50 text-emerald-700 border border-emerald-200{% endif %}">
           {{ 'Admin' if is_admin else 'Investigator' }}
         </span>
@@ -212,6 +240,14 @@
           <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
           <span>Reports</span>
         </a>
+      </div>
+      {% else %}
+      <div class="flex items-center space-x-2">
+        <button type="button" data-fiq-theme-toggle aria-pressed="false"
+                class="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition">
+          <i data-lucide="moon" class="w-3.5 h-3.5"></i>
+          <span data-fiq-theme-label>Light</span>
+        </button>
       </div>
       {% endif %}
     </header>

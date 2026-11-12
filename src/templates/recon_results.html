@@ -60,6 +60,110 @@
 
   <div id="resultsActionFeedback" class="hidden"></div>
 
+  <!-- Phase 3: Scan History / Repeatable Scan Runs Panel -->
+  <div class="fiq-card p-5 space-y-3">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <h2 class="text-sm font-bold text-slate-900">Scan History &amp; Execution Runs</h2>
+          {% if selected_scan %}
+          <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold">
+            Viewing {{ selected_scan.run_label or ('Run ' ~ '%03d'|format(selected_scan.run_number or 1)) }}
+          </span>
+          {% else %}
+          <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+            Viewing All Runs ({{ scans|length }})
+          </span>
+          {% endif %}
+        </div>
+        <p class="text-[11px] text-slate-500">
+          Each scan execution creates an independent run under {{ campaign.name }}. Inspect any single run cleanly or launch another run without overwriting history.
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        {% if selected_scan %}
+        <a href="/recon/{{ recon_id }}/results?scan_id=all"
+           class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition">
+          Show All Runs
+        </a>
+        {% endif %}
+        {% if not is_admin %}
+        <a href="/recon/{{ recon_id }}/workspace?run_new=1"
+           class="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-sm transition">
+          + Launch New Scan Run
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if scans %}
+    <div class="overflow-x-auto">
+      <table class="fiq-table">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Scan ID &amp; Modules</th>
+            <th>Started (IST) &amp; Duration</th>
+            <th>Initiator</th>
+            <th>Status</th>
+            <th>Results</th>
+            <th class="text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in scans %}
+          {% set is_sel = selected_scan and selected_scan.scan_id == s.scan_id %}
+          <tr class="{% if is_sel %}bg-blue-50/50{% endif %}">
+            <td>
+              <span class="px-2 py-0.5 rounded font-bold text-[11px] {% if is_sel %}bg-blue-600 text-white{% else %}bg-slate-100 text-slate-800 border border-slate-200{% endif %}">
+                {{ s.run_label or ('Run ' ~ '%03d'|format(s.run_number or 1)) }}
+              </span>
+            </td>
+            <td>
+              <div class="mono text-[11px] font-bold text-slate-800">{{ s.scan_id }}</div>
+              <div class="text-[10px] text-slate-500">{{ (s.selected_scanners or [])|join(', ') or s.scan_type }}</div>
+            </td>
+            <td>
+              <div class="text-[11px] text-slate-700">{{ s.started_at_ist or (s.started_at|ist) }}</div>
+              <div class="mono text-[10px] text-slate-400">Duration: {{ s.duration_display or '—' }}</div>
+            </td>
+            <td class="text-xs text-slate-700">{{ s.initiator_username or 'investigator' }}</td>
+            <td>
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase
+                {% if s.status == 'Completed' %}bg-emerald-50 text-emerald-700
+                {% elif s.status == 'Failed' %}bg-rose-50 text-rose-700
+                {% elif s.status in ['Partially Completed', 'Cancelled', 'Interrupted'] %}bg-amber-50 text-amber-800
+                {% else %}bg-blue-50 text-blue-700{% endif %}">
+                {{ s.status }}
+              </span>
+            </td>
+            <td class="mono text-[11px] text-slate-700">
+              {{ s.findings_count or 0 }} finding(s) &bull; {{ s.evidence_count or 0 }} ev
+            </td>
+            <td class="text-right">
+              <div class="inline-flex items-center gap-1.5">
+                <a href="/recon/{{ recon_id }}/results?scan_id={{ s.scan_id }}"
+                   class="px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold transition">
+                  {% if is_sel %}Viewing{% else %}View Run{% endif %}
+                </a>
+                {% if not is_admin %}
+                <a href="/reports?investigation_id={{ recon_id }}&scan_id={{ s.scan_id }}"
+                   class="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-semibold transition">
+                  Report
+                </a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-xs text-slate-400 py-2">No individual scan run history entries recorded yet.</div>
+    {% endif %}
+  </div>
+
   <!-- Honest Warning Banner on Failed / Partial / Cancelled Campaigns -->
   {% if campaign.status in ['Failed', 'Partially Completed', 'Cancelled', 'Interrupted'] or failed_stages %}
   <div class="p-4 rounded-xl border {% if campaign.status == 'Failed' %}bg-rose-50 border-rose-200 text-rose-900{% else %}bg-amber-50 border-amber-200 text-amber-900{% endif %} text-xs space-y-1">
@@ -530,7 +634,7 @@
           <div class="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
             <div>
               <div class="mono font-bold text-slate-800">{{ r.file_name }}</div>
-              <div class="text-[10px] text-slate-500">{{ r.created_at }} &bull; {{ (r.file_size / 1024)|round(1) }} KB</div>
+              <div class="text-[10px] text-slate-500">{{ r.created_at_ist or (r.created_at|ist) }} &bull; {{ (r.file_size / 1024)|round(1) }} KB</div>
             </div>
             <div class="flex items-center gap-1.5">
               <a href="{{ r.analysis_url or ('/reports/' ~ (r.report_key or r.file_name)) }}" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold rounded">
@@ -814,12 +918,13 @@ function filterTechFindings() {
 }
 
 async function generateAndDownloadPdf(fmt) {
+  const activeScanId = {{ (selected_scan.scan_id if selected_scan else '')|tojson }};
   FIQ_Alert('resultsActionFeedback', `Compiling ${fmt} PDF deliverable for ${RECON_ID}...`, 'loading');
   try {
     const res = await fetch('/api/v1/reports/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ investigation_id: RECON_ID, report_format: fmt })
+      body: JSON.stringify({ investigation_id: RECON_ID, scan_id: activeScanId || null, report_format: fmt })
     });
     const data = await res.json();
     if (res.ok && data.download_url) {

@@ -48,6 +48,57 @@ class PassiveIntelCollector:
             return False
 
     @staticmethod
+    def _classify_ip_scope(target: str) -> Dict[str, Any]:
+        """Determines whether an IP address is private/special-use vs publicly routable."""
+        try:
+            ip_obj = ipaddress.ip_address(target.strip())
+        except ValueError:
+            return {"is_ip": False, "is_non_public": False, "scope_label": "Domain / Hostname", "note": ""}
+
+        cgnat = ipaddress.ip_network("100.64.0.0/10")
+        doc_nets = (
+            ipaddress.ip_network("192.0.2.0/24"),
+            ipaddress.ip_network("198.51.100.0/24"),
+            ipaddress.ip_network("203.0.113.0/24"),
+        )
+        is_v4 = isinstance(ip_obj, ipaddress.IPv4Address)
+        is_cgnat = is_v4 and ip_obj in cgnat
+        is_doc = is_v4 and any(ip_obj in net for net in doc_nets)
+        is_non_public = bool(
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or is_cgnat
+            or is_doc
+        )
+        if ip_obj.is_loopback:
+            label = "Loopback Address Space (RFC 1122)"
+        elif ip_obj.is_link_local:
+            label = "Link-Local Address Space (RFC 3927)"
+        elif is_cgnat:
+            label = "Shared CGNAT Address Space (RFC 6598)"
+        elif is_doc:
+            label = "Documentation / Test Network (RFC 5737)"
+        elif ip_obj.is_private:
+            label = "Private / Internal Network (RFC 1918)"
+        elif ip_obj.is_reserved or ip_obj.is_multicast:
+            label = "Reserved / Special-Use Address Space"
+        else:
+            label = "Publicly Routable IP Address"
+        return {
+            "is_ip": True,
+            "is_non_public": is_non_public,
+            "scope_label": label,
+            "note": (
+                f"{label}: private/special-use IP addresses are not registered to external organizations in public RIR WHOIS."
+                if is_non_public
+                else ""
+            ),
+        }
+
+    @staticmethod
     def _extract_emails(text: str) -> List[str]:
         if not text:
             return []
@@ -415,15 +466,32 @@ class PassiveIntelCollector:
         compiles clean, non-fabricated structured intelligence.
         """
         clean = target.strip()
-        is_ip = self._is_ip(clean)
+        ip_scope = self._classify_ip_scope(clean)
+        is_ip = ip_scope["is_ip"]
+        is_non_public_ip = ip_scope["is_non_public"]
         checks_set = set(selected_checks or [])
+
+        domain_only_reasons = {
+            "dns_records": "Domain DNS record lookup (A/AAAA/MX/NS/TXT/CNAME) applies to domains, not bare IP targets.",
+            "dns_enumeration": "Extended domain DNS enumeration applies to domains, not bare IP targets.",
+            "nameserver_analysis": "Authoritative nameserver analysis applies to domains, not bare IP targets.",
+            "dns_security_posture": "SPF/DMARC/DNSSEC domain posture checks apply to domains, not bare IP targets.",
+            "subdomains_ct": "Certificate Transparency subdomain enumeration requires a domain target.",
+            "crtsh_history": "Certificate Transparency domain history (crt.sh) requires a domain target.",
+            "public_emails": "Public email harvesting (theHarvester) requires a domain target.",
+            "theharvester": "Search-engine OSINT (theHarvester) requires a domain target.",
+            "search_engine_intel": "Search-engine domain intelligence applies to domain names, not bare IP targets.",
+            "public_metadata": "Domain TXT metadata & CT issuer profiling requires a domain target.",
+        }
 
         output: Dict[str, Any] = {
             "target": clean,
             "target_kind": "ip" if is_ip else "domain",
+            "ip_scope": ip_scope["scope_label"] if is_ip else None,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "checks_requested": list(checks_set),
             "checks_executed": [],
+            "checks_skipped": [],
             "unavailable_checks": [],
             "domain_intel": {
                 "whois": None,
@@ -456,6 +524,27 @@ class PassiveIntelCollector:
             "errors": []
         }
 
+        if is_ip:
+            skipped_domain_ids = sorted(cid for cid in checks_set if cid in domain_only_reasons)
+            for cid in skipped_domain_ids:
+                reason = domain_only_reasons[cid]
+                output["checks_executed"].append({
+                    "id": cid,
+                    "interaction_type": "Pure Passive",
+                    "status": "SKIPPED",
+                    "reason": reason,
+                })
+                output["checks_skipped"].append({"id": cid, "reason": reason})
+            if skipped_domain_ids:
+                output["unavailable_checks"].append({
+                    "id": "domain_only_checks",
+                    "skipped_ids": skipped_domain_ids,
+                    "reason": (
+                        f"Skipped {len(skipped_domain_ids)} domain-only passive module(s) inapplicable to IP target "
+                        f"'{clean}' ({', '.join(skipped_domain_ids)})."
+                    ),
+                })
+
         def _notify(msg: str):
             if progress_cb:
                 try:
@@ -481,21 +570,65 @@ class PassiveIntelCollector:
                     }
                     if getattr(w_rec, "email_addresses", None):
                         output["osint_intel"]["emails"].extend(w_rec.email_addresses)
+                elif is_non_public_ip:
+                    # RFC 1918 / loopback / special-use IPs must NOT be attributed to IANA via public RIR whois
+                    output["checks_executed"].append({
+                        "id": "whois_lookup",
+                        "interaction_type": "Pure Passive",
+                        "status": "NOT_APPLICABLE",
+                        "reason": ip_scope["note"],
+                    })
+                    output["checks_skipped"].append({"id": "whois_lookup", "reason": ip_scope["note"]})
+                    output["domain_intel"]["whois"] = {
+                        "scope": ip_scope["scope_label"],
+                        "ownership_status": "Private / Unregistered Local Address Space (No Public RIR Assignment)",
+                        "registrar": None,
+                        "rir": None,
+                        "organization": None,
+                        "country": "LOCAL",
+                        "status": "NOT_APPLICABLE",
+                        "note": ip_scope["note"],
+                    }
                 else:
-                    # IP WHOIS via RDAP / local whois fallback cleanly
+                    # Public IP WHOIS via CLI whois (filter out IANA special-purpose boilerplate)
                     import subprocess
                     proc = subprocess.run(["whois", clean], capture_output=True, text=True, timeout=self.timeout)
                     raw_w = proc.stdout or ""
-                    org_m = re.search(r"^(?:OrgName|org-name|descr|owner):\s*(.+)$", raw_w, re.MULTILINE | re.IGNORECASE)
+                    org_m = re.search(r"^(?:OrgName|org-name|descr|owner|netname):\s*(.+)$", raw_w, re.MULTILINE | re.IGNORECASE)
                     ctry_m = re.search(r"^Country:\s*([A-Z]{2})$", raw_w, re.MULTILINE | re.IGNORECASE)
-                    output["checks_executed"].append({"id": "whois_lookup", "interaction_type": "Pure Passive", "status": "SUCCESS" if raw_w else "PARTIAL"})
+                    raw_org = org_m.group(1).strip() if org_m else None
+                    is_iana_block = bool(
+                        raw_org and ("internet assigned numbers authority" in raw_org.lower() or "iana-blk" in raw_w.lower())
+                    )
+                    extracted_emails = [
+                        e for e in self._extract_emails(raw_w)
+                        if not (is_iana_block and e.lower().endswith("@iana.org"))
+                    ]
+                    rir_name = "Regional Internet Registry"
+                    upper_w = raw_w.upper()
+                    for cand_rir in ("ARIN", "RIPE", "APNIC", "LACNIC", "AFRINIC"):
+                        if cand_rir in upper_w:
+                            rir_name = cand_rir
+                            break
+                    output["checks_executed"].append({
+                        "id": "whois_lookup",
+                        "interaction_type": "Pure Passive",
+                        "status": "NOT_APPLICABLE" if is_iana_block else ("SUCCESS" if raw_w else "PARTIAL"),
+                    })
                     output["domain_intel"]["whois"] = {
-                        "registrar": "Regional Internet Registry",
-                        "organization": org_m.group(1).strip() if org_m else None,
-                        "country": ctry_m.group(1).strip() if ctry_m else None,
-                        "status": "SUCCESS" if proc.returncode == 0 else "PARTIAL"
+                        "scope": ip_scope["scope_label"],
+                        "ownership_status": (
+                            "Special-Purpose Reservation (No Target Organization Attribution)"
+                            if is_iana_block
+                            else ("Public RIR Netblock" if raw_org else "Undisclosed")
+                        ),
+                        "rir": rir_name,
+                        "registrar": None,
+                        "organization": None if is_iana_block else raw_org,
+                        "country": None if is_iana_block else (ctry_m.group(1).strip() if ctry_m else None),
+                        "status": "NOT_APPLICABLE" if is_iana_block else ("SUCCESS" if proc.returncode == 0 else "PARTIAL"),
                     }
-                    output["osint_intel"]["emails"].extend(self._extract_emails(raw_w))
+                    output["osint_intel"]["emails"].extend(extracted_emails)
             except Exception as e:
                 output["checks_executed"].append({"id": "whois_lookup", "interaction_type": "Pure Passive", "status": "FAILED", "error": str(e)})
                 output["errors"].append(f"WHOIS failed: {str(e)}")
@@ -505,7 +638,13 @@ class PassiveIntelCollector:
             _notify(f"Running RDAP / ASN infrastructure lookup for {clean}...")
             try:
                 rdap_data = self.rdap_collector.lookup_ip(clean) if is_ip else self.rdap_collector.lookup_domain(clean)
-                status = "SUCCESS" if rdap_data and rdap_data.get("status") not in ("ERROR", "NOT_FOUND") else (rdap_data.get("status", "UNAVAILABLE") if isinstance(rdap_data, dict) else "UNAVAILABLE")
+                raw_rdap_stat = rdap_data.get("status", "UNAVAILABLE") if isinstance(rdap_data, dict) else "UNAVAILABLE"
+                if raw_rdap_stat == "LOCAL_PRIVATE_IP":
+                    status = "NOT_APPLICABLE"
+                elif rdap_data and raw_rdap_stat not in ("ERROR", "NOT_FOUND"):
+                    status = "SUCCESS"
+                else:
+                    status = raw_rdap_stat
                 if "rdap_lookup" in checks_set:
                     output["checks_executed"].append({"id": "rdap_lookup", "interaction_type": "Pure Passive", "status": status})
                 if "asn_ip_hosting" in checks_set:
@@ -515,6 +654,8 @@ class PassiveIntelCollector:
                     output["infrastructure_intel"]["asn_hosting"] = {
                         "handle": rdap_data.get("handle"),
                         "name": rdap_data.get("name"),
+                        "scope": rdap_data.get("scope"),
+                        "ownership_status": rdap_data.get("ownership_status"),
                         "start_address": rdap_data.get("start_address"),
                         "end_address": rdap_data.get("end_address"),
                         "country": rdap_data.get("country"),
@@ -524,7 +665,7 @@ class PassiveIntelCollector:
             except Exception as e:
                 output["errors"].append(f"RDAP lookup failed: {str(e)}")
 
-        # 3. DNS Records, Enumeration, Nameserver Analysis & DNS Security
+        # 3. DNS Records, Enumeration, Nameserver Analysis & DNS Security (Domain targets only)
         dns_needed = ("dns_records", "dns_security_posture", "dns_enumeration", "nameserver_analysis", "ip_intelligence", "hosting_info", "technology_intel", "public_org_info", "public_metadata")
         if not is_ip and any(c in checks_set for c in dns_needed):
             _notify(f"Querying DNS records for {clean}...")
@@ -555,10 +696,8 @@ class PassiveIntelCollector:
                     output["checks_executed"].append({"id": "dns_security_posture", "interaction_type": "Pure Passive", "status": "SUCCESS"})
             except Exception as e:
                 output["errors"].append(f"DNS lookup failed: {str(e)}")
-        elif is_ip and ("dns_records" in checks_set or "dns_security_posture" in checks_set or "dns_enumeration" in checks_set):
-            output["unavailable_checks"].append({"id": "dns_records", "reason": "Forward domain DNS checks apply to domain/hostname targets, not bare IP addresses."})
 
-        # 4. Certificate Transparency / Subdomains / Passive Certificate Info
+        # 4. Certificate Transparency / Subdomains / Passive Certificate Info (Domain targets only)
         if not is_ip and ("subdomains_ct" in checks_set or "crtsh_history" in checks_set or "certificate_info" in checks_set):
             _notify(f"Checking Certificate Transparency logs (crt.sh) for {clean}...")
             ct = self._query_crtsh(clean)
@@ -567,10 +706,12 @@ class PassiveIntelCollector:
             for cid in ("subdomains_ct", "crtsh_history", "certificate_info"):
                 if cid in checks_set:
                     output["checks_executed"].append({"id": cid, "interaction_type": "Pure Passive", "status": ct.get("status", "UNKNOWN"), "error": ct.get("error")})
-        elif is_ip and ("subdomains_ct" in checks_set or "crtsh_history" in checks_set):
-            output["unavailable_checks"].append({"id": "subdomains_ct", "reason": "Certificate Transparency subdomain enumeration requires a domain target."})
+        elif is_ip and "certificate_info" in checks_set and not allow_target_contact:
+            cert_reason = "Passive CT log history requires a domain target; direct certificate inspection requires allow_target_contact."
+            output["checks_executed"].append({"id": "certificate_info", "interaction_type": "Pure Passive", "status": "SKIPPED", "reason": cert_reason})
+            output["checks_skipped"].append({"id": "certificate_info", "reason": cert_reason})
 
-        # 5. theHarvester & Search Engine OSINT (Emails, Subdomains & Hosts)
+        # 5. theHarvester & Search Engine OSINT (Domain targets only)
         if not is_ip and ("public_emails" in checks_set or "theharvester" in checks_set or "search_engine_intel" in checks_set):
             _notify(f"Running external OSINT collector for {clean}...")
             try:
@@ -590,10 +731,6 @@ class PassiveIntelCollector:
                     output["checks_executed"].append({"id": "public_emails", "interaction_type": "Pure Passive", "status": h_rec.scan_status})
             except Exception as e:
                 output["errors"].append(f"OSINT harvester error: {str(e)}")
-        elif is_ip and ("public_emails" in checks_set or "search_engine_intel" in checks_set):
-            for cid in ("public_emails", "search_engine_intel"):
-                if cid in checks_set:
-                    output["unavailable_checks"].append({"id": cid, "reason": "Search-engine / public email OSINT applies to domain names."})
 
         # 6. Reverse DNS PTR lookups
         if "reverse_dns" in checks_set or "ip_intelligence" in checks_set or "hosting_info" in checks_set:
@@ -682,8 +819,10 @@ class PassiveIntelCollector:
             if geo_ips:
                 geo_res = [self._lookup_ip_geolocation(ip_a) for ip_a in geo_ips]
                 output["infrastructure_intel"]["ip_geolocation"] = geo_res
-                any_geo = any(g.get("status") in ("SUCCESS", "NOT_APPLICABLE") for g in geo_res)
-                output["checks_executed"].append({"id": "ip_geolocation", "interaction_type": "Pure Passive", "status": "SUCCESS" if any_geo else "UNAVAILABLE"})
+                any_geo = any(g.get("status") == "SUCCESS" for g in geo_res)
+                any_na = any(g.get("status") == "NOT_APPLICABLE" for g in geo_res)
+                geo_stat = "SUCCESS" if any_geo else ("NOT_APPLICABLE" if any_na else "UNAVAILABLE")
+                output["checks_executed"].append({"id": "ip_geolocation", "interaction_type": "Pure Passive", "status": geo_stat})
             else:
                 output["unavailable_checks"].append({"id": "ip_geolocation", "reason": "No resolved IP address available for geolocation lookup."})
 
@@ -692,15 +831,26 @@ class PassiveIntelCollector:
             rdap_d = output["domain_intel"].get("rdap") or {}
             txt_recs = (output["domain_intel"].get("dns_records") or {}).get("TXT", [])
             verifications = [t for t in txt_recs if "verification=" in t.lower() or "ms=" in t.lower() or "docusign" in t.lower()]
-            output["osint_intel"]["public_org_info"] = {
-                "organization": whois_d.get("organization") or rdap_d.get("org"),
-                "registrar": whois_d.get("registrar"),
-                "country": rdap_d.get("country"),
-                "verification_tokens": verifications
-            }
-            output["checks_executed"].append({"id": "public_org_info", "interaction_type": "Pure Passive", "status": "SUCCESS"})
+            if is_non_public_ip:
+                output["osint_intel"]["public_org_info"] = {
+                    "scope": ip_scope["scope_label"],
+                    "ownership_status": "Private / Unregistered Local Address Space",
+                    "organization": None,
+                    "registrar": None,
+                    "country": "LOCAL",
+                    "verification_tokens": []
+                }
+                output["checks_executed"].append({"id": "public_org_info", "interaction_type": "Pure Passive", "status": "NOT_APPLICABLE"})
+            else:
+                output["osint_intel"]["public_org_info"] = {
+                    "organization": whois_d.get("organization") or rdap_d.get("org"),
+                    "registrar": whois_d.get("registrar") or whois_d.get("rir"),
+                    "country": rdap_d.get("country") or whois_d.get("country"),
+                    "verification_tokens": verifications
+                }
+                output["checks_executed"].append({"id": "public_org_info", "interaction_type": "Pure Passive", "status": "SUCCESS"})
 
-        if "public_metadata" in checks_set:
+        if "public_metadata" in checks_set and not is_ip:
             txt_recs = (output["domain_intel"].get("dns_records") or {}).get("TXT", [])
             certs = output["osint_intel"].get("crtsh_certificates") or []
             output["osint_intel"]["public_metadata"] = {
@@ -711,9 +861,18 @@ class PassiveIntelCollector:
             output["checks_executed"].append({"id": "public_metadata", "interaction_type": "Pure Passive", "status": "SUCCESS"})
 
         if "technology_intel" in checks_set:
-            techs = self._detect_passive_technologies(output["domain_intel"], output["infrastructure_intel"].get("http_headers", []))
+            http_hdrs = output["infrastructure_intel"].get("http_headers", [])
+            techs = self._detect_passive_technologies(output["domain_intel"], http_hdrs)
             output["osint_intel"]["technology_intel"] = techs
-            output["checks_executed"].append({"id": "technology_intel", "interaction_type": "Pure Passive", "status": "SUCCESS"})
+            if is_ip and not http_hdrs:
+                output["checks_executed"].append({
+                    "id": "technology_intel",
+                    "interaction_type": "Pure Passive",
+                    "status": "SKIPPED",
+                    "reason": "Passive DNS technology profiling requires a domain target or HTTP header inspection.",
+                })
+            else:
+                output["checks_executed"].append({"id": "technology_intel", "interaction_type": "Pure Passive", "status": "SUCCESS"})
 
         output["osint_intel"]["emails"] = sorted(set(output["osint_intel"]["emails"]))
         output["infrastructure_intel"]["resolved_ips"] = sorted(set(output["infrastructure_intel"]["resolved_ips"]))

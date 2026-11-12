@@ -235,6 +235,16 @@ class NucleiCollector:
                 except Exception:
                     pass
                 raise
+            elapsed_seconds = round(max(0.0, time.monotonic() - started), 2)
+            rc = proc.returncode
+            stderr_excerpt = (stderr_data or "").strip()[:500] or None
+
+            safe_cmd_summary = (
+                f"nuclei -profile {applied_policy.get('profile', profile)} "
+                f"-rl {applied_policy.get('rate_limit', rate_limit)} "
+                f"-c {applied_policy.get('concurrency', concurrency)} "
+                f"(targets={len(target_urls)}, timeout={safe_timeout}s)"
+            )
 
             if cancelled:
                 return {
@@ -242,9 +252,28 @@ class NucleiCollector:
                     "target": target,
                     "targets_scanned": target_urls,
                     "applied_policy": applied_policy,
+                    "duration_seconds": elapsed_seconds,
+                    "timeout_seconds": safe_timeout,
+                    "timed_out": False,
+                    "returncode": rc,
                     "error": "Nuclei scan cancelled by user request.",
                     "findings": [],
                     "raw_records_count": 0,
+                    "execution_meta": {
+                        "scanner": "nuclei",
+                        "profile": applied_policy.get("profile", profile),
+                        "duration_seconds": elapsed_seconds,
+                        "timeout_seconds": safe_timeout,
+                        "timed_out": False,
+                        "returncode": rc,
+                        "command_summary": safe_cmd_summary,
+                        "targets_scanned_count": len(target_urls),
+                        "stderr_excerpt": stderr_excerpt,
+                        "raw_records_count": 0,
+                        "parsed_findings_count": 0,
+                        "parse_errors_count": 0,
+                        "incomplete_reason": "Cancelled by operator",
+                    },
                 }
 
             # Read JSONL output cleanly (even partial findings on timeout if present)
@@ -273,7 +302,7 @@ class NucleiCollector:
             except Exception as store_err:
                 logger.warning(f"Failed archiving Nuclei JSONL to SeaweedFS: {store_err}")
 
-        parsed_findings, raw_count = self.parse_jsonl_output(
+        parsed_findings, raw_count, parse_errors_count = self.parse_jsonl_with_stats(
             jsonl_text,
             default_target=auth_target,
             investigation_id=investigation_id,
@@ -281,42 +310,99 @@ class NucleiCollector:
             evidence_reference=evidence_ref,
         )
 
+        incomplete_reason: Optional[str] = None
+        skipped_checks: List[str] = []
+        if timed_out:
+            incomplete_reason = (
+                f"Timeout reached at {safe_timeout}s during profile '{applied_policy.get('profile', profile)}' "
+                f"across {len(target_urls)} target URL(s); remaining template subdirectories/checks did not finish."
+            )
+            subdirs = applied_policy.get("template_subdirs") or []
+            if subdirs:
+                skipped_checks.append(
+                    f"Late template phases in profile '{applied_policy.get('profile', profile)}' "
+                    f"({', '.join(subdirs)}) may be incomplete after {elapsed_seconds}s timeout."
+                )
+        elif rc not in (0, None):
+            incomplete_reason = stderr_excerpt or f"Nuclei exited unexpectedly with return code {rc}."
+
+        exec_meta = {
+            "scanner": "nuclei",
+            "profile": applied_policy.get("profile", profile),
+            "template_subdirs": applied_policy.get("template_subdirs", []),
+            "severities": applied_policy.get("severities", []),
+            "duration_seconds": elapsed_seconds,
+            "timeout_seconds": safe_timeout,
+            "timed_out": timed_out,
+            "returncode": rc,
+            "command_summary": safe_cmd_summary,
+            "targets_scanned_count": len(target_urls),
+            "targets_scanned": target_urls[:20],
+            "stderr_excerpt": stderr_excerpt,
+            "raw_records_count": raw_count,
+            "parsed_findings_count": len(parsed_findings),
+            "parse_errors_count": parse_errors_count,
+            "incomplete_reason": incomplete_reason,
+            "skipped_checks": skipped_checks,
+        }
+
         if timed_out and not parsed_findings:
             return {
                 "status": "TIMEOUT",
                 "target": target,
                 "targets_scanned": target_urls,
                 "applied_policy": applied_policy,
-                "error": f"Nuclei execution timed out after {safe_timeout}s with 0 findings recorded.",
+                "duration_seconds": elapsed_seconds,
+                "timeout_seconds": safe_timeout,
+                "timed_out": True,
+                "returncode": rc,
+                "error": f"Nuclei execution timed out after {safe_timeout}s ({elapsed_seconds}s elapsed) with 0 findings recorded.",
                 "findings": [],
                 "raw_records_count": 0,
                 "evidence": evidence_meta,
+                "errors": [incomplete_reason] if incomplete_reason else [],
+                "execution_meta": exec_meta,
             }
 
-        rc = proc.returncode
         if rc not in (0, None) and not parsed_findings and not timed_out:
-            err_msg = (stderr_data or "").strip() or f"Nuclei exited with code {rc}."
+            err_msg = stderr_excerpt or f"Nuclei exited with code {rc}."
             return {
                 "status": "FAILED",
                 "target": target,
                 "targets_scanned": target_urls,
                 "applied_policy": applied_policy,
+                "duration_seconds": elapsed_seconds,
+                "timeout_seconds": safe_timeout,
+                "timed_out": False,
+                "returncode": rc,
                 "error": err_msg[:400],
                 "findings": [],
                 "raw_records_count": 0,
                 "evidence": evidence_meta,
+                "errors": [err_msg[:400]],
+                "execution_meta": exec_meta,
             }
 
+        is_partial = timed_out or (rc not in (0, None))
+        status_out = "PARTIAL" if is_partial else "COMPLETED"
+        errors_out: List[str] = [incomplete_reason] if incomplete_reason else []
+
         return {
-            "status": "PARTIAL" if timed_out else "COMPLETED",
+            "status": status_out,
             "target": target,
             "targets_scanned": target_urls,
             "applied_policy": applied_policy,
+            "duration_seconds": elapsed_seconds,
+            "timeout_seconds": safe_timeout,
+            "timed_out": timed_out,
+            "returncode": rc,
             "findings": parsed_findings,
             "raw_records_count": raw_count,
             "evidence": evidence_meta,
-            "timed_out": timed_out,
-            "errors": [f"Partial results: timeout reached at {safe_timeout}s."] if timed_out else [],
+            "error": incomplete_reason,
+            "errors": errors_out,
+            "skipped_checks": skipped_checks,
+            "execution_meta": exec_meta,
         }
 
     @classmethod
@@ -329,9 +415,29 @@ class NucleiCollector:
         evidence_reference: str = "nuclei_jsonl",
     ) -> Tuple[List[Dict[str, Any]], int]:
         """Parses Nuclei JSONL lines into normalized, deduplicated FootprintIQ findings."""
+        findings, raw_count, _ = cls.parse_jsonl_with_stats(
+            jsonl_text=jsonl_text,
+            default_target=default_target,
+            investigation_id=investigation_id,
+            scan_id=scan_id,
+            evidence_reference=evidence_reference,
+        )
+        return findings, raw_count
+
+    @classmethod
+    def parse_jsonl_with_stats(
+        cls,
+        jsonl_text: str,
+        default_target: str,
+        investigation_id: str,
+        scan_id: Optional[str] = None,
+        evidence_reference: str = "nuclei_jsonl",
+    ) -> Tuple[List[Dict[str, Any]], int, int]:
+        """Parses Nuclei JSONL lines into normalized findings plus raw & parse-error counts."""
         findings: List[Dict[str, Any]] = []
         seen_keys = set()
         raw_count = 0
+        parse_errors = 0
 
         for line in (jsonl_text or "").splitlines():
             raw_line = line.strip()
@@ -340,8 +446,10 @@ class NucleiCollector:
             try:
                 rec = json.loads(raw_line)
             except json.JSONDecodeError:
+                parse_errors += 1
                 continue
             if not isinstance(rec, dict) or not (rec.get("template-id") or rec.get("templateID")):
+                parse_errors += 1
                 continue
 
             raw_count += 1
@@ -365,7 +473,7 @@ class NucleiCollector:
             finding.pop("_matched_at", None)
             findings.append(finding)
 
-        return findings, raw_count
+        return findings, raw_count, parse_errors
 
     @staticmethod
     def _normalize_jsonl_record(
@@ -442,6 +550,13 @@ class NucleiCollector:
         desc_parts.append(f"Matched endpoint: {matched_at}.")
         if matcher_name:
             desc_parts.append(f"Matcher: {matcher_name}.")
+        if "matcher-status" in rec:
+            desc_parts.append(f"Scanner matcher-status: {bool(rec.get('matcher-status'))}.")
+        epss_val = classification.get("epss-score")
+        if epss_val is not None:
+            desc_parts.append(f"EPSS score: {epss_val}.")
+        if rec.get("curl-command"):
+            desc_parts.append("Evidence includes non-destructive automated request/response probe (independent exploit verification not yet performed).")
         if extracted:
             sample = ", ".join(str(x) for x in extracted[:5])
             desc_parts.append(f"Extracted evidence: {sample}.")

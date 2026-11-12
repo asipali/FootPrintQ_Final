@@ -185,7 +185,10 @@ class UnifiedScanOrchestrator:
                 sha256_hash=ev_meta["sha256_hash"],
                 seaweed_fid=ev_meta.get("seaweed_fid"),
                 seaweed_url=ev_meta.get("seaweed_url"),
-                local_path=ev_meta["local_path"]
+                local_path=ev_meta["local_path"],
+                scanner_source="Passive Intelligence",
+                target=target,
+                content_type="application/json",
             )
 
         return {
@@ -249,7 +252,10 @@ class UnifiedScanOrchestrator:
                 seaweed_fid=ev_meta.get("seaweed_fid"),
                 seaweed_url=ev_meta.get("seaweed_url"),
                 local_path=ev_meta.get("local_path"),
-                scan_id=scan_id
+                scan_id=scan_id,
+                scanner_source="Passive Intelligence",
+                target=target,
+                content_type="application/json",
             )
         except Exception as e:
             logger.warning(f"Failed to archive passive intel evidence: {e}")
@@ -299,7 +305,10 @@ class UnifiedScanOrchestrator:
                 seaweed_fid=ev_meta.get("seaweed_fid"),
                 seaweed_url=ev_meta.get("seaweed_url"),
                 local_path=ev_meta.get("local_path"),
-                scan_id=scan_id
+                scan_id=scan_id,
+                scanner_source="Nmap Active Discovery",
+                target=target,
+                content_type="application/xml",
             )
 
         extracted_hosts: List[Dict[str, Any]] = []
@@ -347,7 +356,7 @@ class UnifiedScanOrchestrator:
         }
 
     def _run_nmap_nse(self, target: str, scripts: Optional[List[str]], investigation_id: str, scan_id: str) -> Dict[str, Any]:
-        """Runs policy-controlled Nmap NSE checks."""
+        """Runs policy-controlled Nmap NSE checks and registers XML evidence idempotently."""
         nse_res = self.nse_collector.scan_target(
             target=target,
             scripts=scripts,
@@ -358,6 +367,26 @@ class UnifiedScanOrchestrator:
         findings = nse_res.get("findings", [])
         for f in findings:
             self.repo.add_vulnerability_finding(investigation_id, f, scan_id=scan_id)
+
+        ev = nse_res.get("evidence")
+        if isinstance(ev, dict) and ev.get("file_name") and ev.get("sha256_hash"):
+            try:
+                self.repo.add_evidence_record(
+                    investigation_id=investigation_id,
+                    evidence_type="nse_xml",
+                    file_name=ev["file_name"],
+                    file_size=ev["file_size"],
+                    sha256_hash=ev["sha256_hash"],
+                    seaweed_fid=ev.get("seaweed_fid"),
+                    seaweed_url=ev.get("seaweed_url"),
+                    local_path=ev.get("local_path"),
+                    scan_id=scan_id,
+                    scanner_source="Nmap NSE",
+                    target=target,
+                    content_type="application/xml",
+                )
+            except Exception as ev_err:
+                logger.warning(f"SeaweedFS DB record notice for NSE XML: {ev_err}")
 
         return nse_res
 
@@ -405,6 +434,9 @@ class UnifiedScanOrchestrator:
                     seaweed_url=ev.get("seaweed_url"),
                     local_path=ev.get("local_path"),
                     scan_id=scan_id,
+                    scanner_source="ProjectDiscovery Nuclei",
+                    target=target,
+                    content_type="application/x-ndjson",
                 )
             except Exception as ev_err:
                 logger.warning(f"SeaweedFS DB record notice for Nuclei JSONL: {ev_err}")
@@ -419,6 +451,14 @@ class UnifiedScanOrchestrator:
             "findings": findings,
             "evidence": ev,
             "error": nuc_res.get("error"),
+            "errors": nuc_res.get("errors", []),
+            "duration_seconds": nuc_res.get("duration_seconds"),
+            "timeout_seconds": nuc_res.get("timeout_seconds"),
+            "timed_out": nuc_res.get("timed_out", False),
+            "returncode": nuc_res.get("returncode"),
+            "raw_records_count": nuc_res.get("raw_records_count", len(findings)),
+            "skipped_checks": nuc_res.get("skipped_checks", []),
+            "execution_meta": nuc_res.get("execution_meta", {}),
         }
 
     def _run_nessus(self, target: str, investigation_id: str, scan_id: str, template_uuid: Optional[str] = None) -> Dict[str, Any]:
@@ -454,7 +494,10 @@ class UnifiedScanOrchestrator:
                     seaweed_fid=ev_meta.get("seaweed_fid"),
                     seaweed_url=ev_meta.get("seaweed_url"),
                     local_path=ev_meta.get("local_path"),
-                    scan_id=scan_id
+                    scan_id=scan_id,
+                    scanner_source="Tenable Nessus",
+                    target=target,
+                    content_type="application/xml",
                 )
             except Exception as e:
                 logger.warning(f"SeaweedFS upload notice for Nessus export: {e}")

@@ -72,6 +72,9 @@ def _resolve_authenticated_user(
     user = repo.get_user_by_username(username)
     if not user:
         return None
+    token_tv = payload.get("tv")
+    if token_tv is not None and int(token_tv) != int(user.get("token_version", 1) or 1):
+        return None
     # Strip password hash before passing user dictionary around dependencies
     safe_user = {k: v for k, v in user.items() if k != "hashed_password"}
     safe_user["csrf_token"] = payload.get("csrf")

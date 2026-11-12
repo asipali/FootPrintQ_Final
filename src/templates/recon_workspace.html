@@ -11,10 +11,21 @@
       <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-600 shrink-0"></i>
       <span>
         Recon campaign created and saved in <strong>Draft</strong> status:
-        <span class="mono font-bold">{{ recon_id }}</span>. No scan has started yet &mdash; select your assessments below.
+        <span class="mono font-bold">{{ recon_id }}</span>. No scan has started yet &mdash; select your assessments below to launch Run 001.
       </span>
     </div>
     <a href="/recon" class="text-xs font-semibold text-emerald-800 hover:underline shrink-0">All Campaigns</a>
+  </div>
+  {% elif run_new %}
+  <div class="p-4 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-between gap-3">
+    <div class="flex items-center space-x-2.5 text-xs text-blue-900">
+      <i data-lucide="layers" class="w-4 h-4 text-blue-600 shrink-0"></i>
+      <span>
+        Configuring <strong>Run {{ '%03d'|format(next_run_number or 1) }}</strong> under investigation <span class="mono font-bold">{{ recon_id }}</span>.
+        Each scan run is stored independently &mdash; prior runs, findings, evidence, and PDFs remain preserved cleanly.
+      </span>
+    </div>
+    <a href="/recon/{{ recon_id }}/results" class="text-xs font-semibold text-blue-800 hover:underline shrink-0">Scan History ({{ (runs or [])|length }})</a>
   </div>
   {% endif %}
 
@@ -37,7 +48,7 @@
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
           <span>Target: <strong class="mono text-slate-800">{{ campaign.target_value }}</strong></span>
           <span>Purpose: <strong class="text-slate-800">{{ campaign.purpose or 'Security Assessment' }}</strong></span>
-          <span>Created: <strong class="mono text-slate-700">{{ campaign.created_at[:16] if campaign.created_at else 'Now' }}</strong></span>
+          <span>Created: <strong class="mono text-slate-700">{{ (campaign.created_at|ist) if campaign.created_at else 'Now' }}</strong></span>
           <span>Scope: <strong class="text-slate-700">{{ campaign.scope_description or 'Authorized Campaign Scope' }}</strong></span>
         </div>
       </div>
@@ -1071,7 +1082,8 @@ async function saveAndMaybeStart(shouldStart) {
       return;
     }
 
-    window.location.href = `/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/live`;
+    const sidParam = startData.scan_id ? `?scan_id=${encodeURIComponent(startData.scan_id)}` : '';
+    window.location.href = `/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/live${sidParam}`;
   } catch (err) {
     showWorkspaceFeedback(true, 'Request error: ' + err.message);
   } finally {

@@ -57,7 +57,7 @@
         <tbody>
           {% for log in audit_logs %}
           <tr>
-            <td class="mono text-[11px] text-slate-500 whitespace-nowrap">{{ (log.timestamp or '')[:19] }}</td>
+            <td class="mono text-[11px] text-slate-500 whitespace-nowrap">{{ log.timestamp_ist or (log.timestamp|ist) }}</td>
             <td class="text-xs font-semibold text-slate-900">{{ log.username or ('User #' ~ log.user_id if log.user_id else 'anonymous') }}</td>
             <td>
               <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700">

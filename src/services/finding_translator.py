@@ -28,19 +28,27 @@ def parse_confidence_score(raw: Any, default: float = 0.0) -> float:
 
 
 def classify_confidence(finding: Dict[str, Any]) -> str:
-    """Returns clear evidence classification label for analysts and executives."""
-    ver = str(finding.get("verification_status") or "").lower()
-    sev = str(finding.get("severity") or "Informational").lower()
-    src = str(finding.get("detection_source") or "").lower()
+    """
+    Returns evidence classification label preserving the strict distinction between
+    an automated scanner matcher hit ('Observed Scanner Match') and an independently
+    verified/confirmed vulnerability ('Confirmed Vulnerability').
+    """
+    ver = str(finding.get("verification_status") or "").strip().lower()
+    sev = str(finding.get("severity") or "Informational").strip().lower()
+    src = str(finding.get("detection_source") or "").strip().lower()
     conf = parse_confidence_score(finding.get("confidence"), default=0.0)
 
-    if sev == "informational" or sev == "info":
-        return "Informational Observation"
-    if ver in ("verified", "confirmed") or conf >= 0.85:
-        return "Confirmed Vulnerability"
-    if ver in ("false_positive",):
+    if ver in ("false_positive", "marked_false_positive"):
         return "Marked False Positive"
-    if src in ("nessus", "nuclei", "nmap_nse", "nse", "openvas", "greenbone") and conf >= 0.65:
+    if sev in ("informational", "info"):
+        return "Informational Observation"
+    if ver in ("verified", "confirmed"):
+        return "Confirmed Vulnerability"
+    if src in ("nessus", "nuclei", "nmap_nse", "nse", "openvas", "greenbone") and (
+        ver == "observed" or conf >= 0.80
+    ):
+        return "Observed Scanner Match"
+    if src in ("nessus", "nuclei", "nmap_nse", "nse", "openvas", "greenbone") and conf >= 0.50:
         return "Potential Vulnerability"
     return "Unverified / Informational"
 
@@ -66,7 +74,15 @@ def explain_finding_plain_language(finding: Dict[str, Any]) -> Dict[str, str]:
     svc_phrase = f"{service} ({version})" if version else service
 
     # 1. What was discovered
-    discovered = f"{title} was observed on {target} {port_phrase} running {svc_phrase}."
+    if confidence_label == "Observed Scanner Match":
+        discovered = (
+            f"Automated scanner signature matched {title} on {target} {port_phrase} running {svc_phrase} "
+            "(matcher hit recorded; independent exploitability has not yet been manually verified)."
+        )
+    elif confidence_label == "Confirmed Vulnerability":
+        discovered = f"Verified vulnerability {title} on {target} {port_phrase} running {svc_phrase}."
+    else:
+        discovered = f"{title} was observed on {target} {port_phrase} running {svc_phrase}."
     if cve:
         discovered += f" Associated CVE reference: {cve}."
 
