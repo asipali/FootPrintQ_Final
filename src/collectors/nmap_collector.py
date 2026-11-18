@@ -185,13 +185,13 @@ class NmapCollector:
         self.version = self._detect_version()
         self.capabilities = detect_nmap_capabilities(self.binary_path)
 
-    def build_safe_custom_args(self, options: Dict[str, Any]) -> List[str]:
+    def build_safe_custom_args(self, options: Dict[str, Any], allow_privileged: bool = False) -> List[str]:
         """
         Builds a strictly allowlisted Nmap argument list from validated UI/API options.
         Arbitrary command flags or shell syntax are strictly impossible here.
         """
         args: List[str] = []
-        has_raw = self.capabilities.get("has_raw_socket", False)
+        has_raw = self.capabilities.get("has_raw_socket", False) or allow_privileged
 
         # 1. Host discovery mode
         discovery = str(options.get("host_discovery", "skip_discovery") or "skip_discovery").strip().lower()
@@ -321,7 +321,8 @@ class NmapCollector:
         auth_record: TargetAuthorizationRecord,
         options: Dict[str, Any],
         output_dir: Optional[str] = None,
-        timeout: Optional[int] = None
+        timeout: Optional[int] = None,
+        allow_privileged: bool = False
     ) -> NmapCollectorResult:
         """
         Executes a manually configured active Nmap scan built purely from validated allowlisted flags.
@@ -329,7 +330,7 @@ class NmapCollector:
         if not os.path.exists(self.binary_path):
             raise FileNotFoundError(f"Nmap binary not found at: '{self.binary_path}'")
 
-        custom_args = self.build_safe_custom_args(options)
+        custom_args = self.build_safe_custom_args(options, allow_privileged=allow_privileged)
         target = auth_record.target
         effective_timeout = timeout or self.timeout
 
@@ -341,7 +342,15 @@ class NmapCollector:
             stderr_path = os.path.join(output_dir, "nmap_stderr.txt")
             metadata_path = os.path.join(output_dir, "scan_metadata.json")
 
-        cmd = [self.binary_path] + custom_args
+        cmd = [self.binary_path]
+        if allow_privileged and shutil.which("sudo"):
+            try:
+                chk = subprocess.run(["sudo", "-n", self.binary_path, "--version"], capture_output=True, text=True, timeout=2)
+                if chk.returncode == 0:
+                    cmd = ["sudo", "-n", self.binary_path]
+            except Exception:
+                pass
+        cmd.extend(custom_args)
         if xml_path:
             cmd.extend(["-oX", xml_path])
         cmd.append(target)

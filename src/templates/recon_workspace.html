@@ -472,6 +472,24 @@
         </div>
       </div>
     </div>
+
+    <!-- Active Recon Privilege Consent & Authorization Checkbox -->
+    <div class="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200">
+      <label class="flex items-start space-x-3 cursor-pointer">
+        <input id="activePrivilegeConsentCheck" type="checkbox"
+               class="psa-consent-check mt-0.5 rounded border-indigo-400 text-indigo-600 focus:ring-indigo-500"
+               onchange="syncPrivilegeConsent(this); refreshReviewSummary();">
+        <div class="space-y-0.5">
+          <span class="text-xs font-bold text-indigo-950 block">Privilege Consent &amp; Elevation (Optional)</span>
+          <span class="text-xs text-indigo-900 block font-medium">
+            I authorize FootprintIQ to request elevated privileges for scan operations that require them.
+          </span>
+          <span class="text-[11px] text-indigo-700 block">
+            Authorizes raw-socket packet operations (TCP SYN stealth scan, OS fingerprinting, UDP scan). If left unchecked, FootprintIQ automatically falls back to safe unprivileged alternatives (TCP Connect).
+          </span>
+        </div>
+      </label>
+    </div>
   </section>
 
   <!-- ====================================================================== -->
@@ -653,6 +671,24 @@
         {% endfor %}
       </div>
     </div>
+
+    <!-- Vulnerability Assessment Privilege Consent & Authorization Checkbox -->
+    <div class="p-4 rounded-xl bg-rose-50/70 border border-rose-200">
+      <label class="flex items-start space-x-3 cursor-pointer">
+        <input id="vulnPrivilegeConsentCheck" type="checkbox"
+               class="psa-consent-check mt-0.5 rounded border-rose-400 text-rose-600 focus:ring-rose-500"
+               onchange="syncPrivilegeConsent(this); refreshReviewSummary();">
+        <div class="space-y-0.5">
+          <span class="text-xs font-bold text-rose-950 block">Privilege Consent &amp; Elevation (Optional)</span>
+          <span class="text-xs text-rose-900 block font-medium">
+            I authorize FootprintIQ to request elevated privileges for scan operations that require them.
+          </span>
+          <span class="text-[11px] text-rose-700 block">
+            Authorizes raw-packet vulnerability checks and packet-crafting NSE scripts. Standard unprivileged scripts and HTTP templates run without elevation.
+          </span>
+        </div>
+      </label>
+    </div>
   </section>
 
   <!-- ====================================================================== -->
@@ -697,6 +733,14 @@
       </span>
     </label>
 
+    <div id="revPrivilegeBanner" class="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex items-center justify-between">
+      <div class="flex items-center space-x-2">
+        <i data-lucide="shield" class="w-4 h-4 text-slate-500"></i>
+        <span class="text-slate-700">Privilege Consent: <strong id="revPrivilegeStatus" class="text-slate-900">Unchecked (Safe Unprivileged Fallback)</strong></span>
+      </div>
+      <span id="revPrivilegeBadge" class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-200 text-slate-700">Standard Mode</span>
+    </div>
+
     <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
       <button type="button" onclick="focusConfiguration()"
               class="px-4 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-bold rounded-lg transition">
@@ -716,6 +760,61 @@
       </div>
     </div>
   </section>
+
+  <!-- PSA Identity Verification Modal -->
+  <div id="psaVerificationModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="fiq-card max-w-lg w-full p-6 space-y-5 bg-white border border-slate-200 shadow-2xl rounded-2xl animate-in fade-in zoom-in-95 duration-150">
+      <div class="flex items-start justify-between">
+        <div class="space-y-1">
+          <div class="flex items-center space-x-2">
+            <div class="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+              <i data-lucide="shield-check" class="w-4 h-4"></i>
+            </div>
+            <h3 class="text-sm font-bold text-slate-900">Authorize Elevated Privileges</h3>
+          </div>
+          <p class="text-xs text-slate-500">
+            Selected scan operations require elevated packet privileges. Re-verify your identity to proceed.
+          </p>
+        </div>
+        <button type="button" onclick="closePsaModal()" class="text-slate-400 hover:text-slate-600 text-sm p-1 rounded-lg">
+          ✕
+        </button>
+      </div>
+
+      <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+        <div class="font-bold text-slate-800 uppercase tracking-wider text-[10px]">Privileged Operations Detected</div>
+        <ul id="psaDetectedOpsList" class="list-disc list-inside space-y-1 text-slate-700 font-medium">
+          <!-- Populated dynamically via detect API -->
+        </ul>
+      </div>
+
+      <div class="space-y-2 text-xs">
+        <label for="psaPasswordInput" class="block font-bold text-slate-800">
+          Re-enter FootprintIQ Account Password:
+        </label>
+        <input id="psaPasswordInput" type="password" placeholder="Account password"
+               autocomplete="current-password"
+               class="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl bg-white text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+               onkeydown="if(event.key === 'Enter') confirmPsaAuthorization();">
+        <p class="text-[11px] text-slate-500 leading-normal">
+          <strong>Security Notice:</strong> Never enter system root or Kali passwords. Verification validates strictly against your FootprintIQ account password hash and issues a temporary single-use ticket (5-minute TTL).
+        </p>
+      </div>
+
+      <div id="psaModalError" class="hidden p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 font-medium"></div>
+
+      <div class="flex items-center justify-end space-x-3 pt-2 border-t border-slate-100">
+        <button type="button" onclick="closePsaModal()"
+                class="px-4 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-lg transition">
+          Cancel
+        </button>
+        <button type="button" id="psaConfirmBtn" onclick="confirmPsaAuthorization()"
+                class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg shadow-sm transition inline-flex items-center space-x-1.5">
+          <span>Authorize &amp; Launch Scan</span>
+        </button>
+      </div>
+    </div>
+  </div>
 
 </div>
 
@@ -987,7 +1086,22 @@ function buildConfigPayload() {
     cfg.vulnerability = vulnObj;
   }
 
+  const isPrivConsent = !!(
+    document.getElementById('activePrivilegeConsentCheck')?.checked ||
+    document.getElementById('vulnPrivilegeConsentCheck')?.checked
+  );
+  cfg.privilege_consent = isPrivConsent;
+
   return cfg;
+}
+
+function syncPrivilegeConsent(sourceEl) {
+  const isChecked = !!(sourceEl && sourceEl.checked);
+  const a = document.getElementById('activePrivilegeConsentCheck');
+  const v = document.getElementById('vulnPrivilegeConsentCheck');
+  if (a) a.checked = isChecked;
+  if (v) v.checked = isChecked;
+  refreshReviewSummary();
 }
 
 function refreshReviewSummary() {
@@ -1018,10 +1132,130 @@ function refreshReviewSummary() {
   b.className = authOk
     ? 'px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200'
     : 'px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200';
+
+  const isPrivConsent = !!cfg.privilege_consent;
+  const pStat = document.getElementById('revPrivilegeStatus');
+  const pBadge = document.getElementById('revPrivilegeBadge');
+  if (pStat && pBadge) {
+    if (isPrivConsent) {
+      pStat.textContent = 'Authorized (Elevated Privileges Permitted)';
+      pStat.className = 'text-indigo-700 font-bold';
+      pBadge.textContent = 'Elevated Authorized';
+      pBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-800';
+    } else {
+      pStat.textContent = 'Unchecked (Safe Unprivileged Fallback)';
+      pStat.className = 'text-slate-700 font-semibold';
+      pBadge.textContent = 'Standard Mode';
+      pBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-200 text-slate-700';
+    }
+  }
 }
 
 function focusConfiguration() {
   document.getElementById('categorySelectionSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+let pendingScanConfig = null;
+
+function openPsaModal(detectedReasons) {
+  const modal = document.getElementById('psaVerificationModal');
+  const list = document.getElementById('psaDetectedOpsList');
+  const errBox = document.getElementById('psaModalError');
+  const pwInput = document.getElementById('psaPasswordInput');
+  list.innerHTML = '';
+  (detectedReasons || []).forEach(r => {
+    const li = document.createElement('li');
+    li.textContent = r;
+    list.appendChild(li);
+  });
+  errBox.classList.add('hidden');
+  errBox.textContent = '';
+  pwInput.value = '';
+  modal.classList.remove('hidden');
+  setTimeout(() => pwInput.focus(), 100);
+}
+
+function closePsaModal() {
+  const modal = document.getElementById('psaVerificationModal');
+  modal.classList.add('hidden');
+  document.getElementById('psaPasswordInput').value = '';
+  document.getElementById('btnStartScan').disabled = false;
+  document.getElementById('btnSaveConfigOnly').disabled = false;
+}
+
+async function confirmPsaAuthorization() {
+  const pwInput = document.getElementById('psaPasswordInput');
+  const password = pwInput.value.trim();
+  const errBox = document.getElementById('psaModalError');
+  const confirmBtn = document.getElementById('psaConfirmBtn');
+  if (!password) {
+    errBox.textContent = 'Password is required to authorize elevated privileges.';
+    errBox.classList.remove('hidden');
+    pwInput.focus();
+    return;
+  }
+  confirmBtn.disabled = true;
+  confirmBtn.innerHTML = 'Verifying...';
+
+  try {
+    const verifyRes = await fetch(`/api/v1/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/psa/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        password: password,
+        scan_config: pendingScanConfig
+      })
+    });
+    const verifyData = await verifyRes.json();
+    if (!verifyRes.ok) {
+      errBox.textContent = verifyData.detail || 'Identity verification failed. Invalid password.';
+      errBox.classList.remove('hidden');
+      pwInput.value = '';
+      pwInput.focus();
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = 'Authorize & Launch Scan';
+      return;
+    }
+
+    const ticketToken = verifyData.ticket_token;
+    closePsaModal();
+    await executeScanStart(true, ticketToken);
+  } catch (err) {
+    errBox.textContent = 'Verification error: ' + err.message;
+    errBox.classList.remove('hidden');
+    confirmBtn.disabled = false;
+    confirmBtn.innerHTML = 'Authorize & Launch Scan';
+  }
+}
+
+async function executeScanStart(privilegeConsent, psaTicket) {
+  const startBtn = document.getElementById('btnStartScan');
+  const saveBtn = document.getElementById('btnSaveConfigOnly');
+  startBtn.disabled = true;
+  saveBtn.disabled = true;
+  try {
+    const startRes = await fetch(`/api/v1/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        privilege_consent: !!privilegeConsent,
+        psa_ticket: psaTicket || null,
+        scan_config: pendingScanConfig
+      })
+    });
+    const startData = await startRes.json();
+    if (!startRes.ok) {
+      showWorkspaceFeedback(true, startData.detail || 'Unable to start scan.');
+      return;
+    }
+    const sidParam = startData.scan_id ? `?scan_id=${encodeURIComponent(startData.scan_id)}` : '';
+    window.location.href = `/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/live${sidParam}`;
+  } catch (err) {
+    showWorkspaceFeedback(true, 'Scan launch error: ' + err.message);
+  } finally {
+    startBtn.disabled = false;
+    saveBtn.disabled = false;
+  }
 }
 
 async function saveAndMaybeStart(shouldStart) {
@@ -1071,19 +1305,29 @@ async function saveAndMaybeStart(shouldStart) {
       return;
     }
 
-    const startRes = await fetch(`/api/v1/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    });
-    const startData = await startRes.json();
-    if (!startRes.ok) {
-      showWorkspaceFeedback(true, startData.detail || 'Unable to start scan.');
-      return;
+    pendingScanConfig = cfg;
+    const isConsentChecked = !!cfg.privilege_consent;
+
+    // Detect if elevated privileges are needed
+    try {
+      const detectRes = await fetch(`/api/v1/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/psa/detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scan_config: cfg })
+      });
+      const detectData = await detectRes.json();
+
+      if (detectRes.ok && detectData.requires_privilege && isConsentChecked) {
+        // Prompt for investigator identity verification
+        openPsaModal(detectData.privileged_reasons || detectData.privileged_operations);
+        return;
+      }
+    } catch (_) {
+      // If detection request fails, proceed to start with standard fallback handling
     }
 
-    const sidParam = startData.scan_id ? `?scan_id=${encodeURIComponent(startData.scan_id)}` : '';
-    window.location.href = `/recon/${encodeURIComponent(WORKSPACE_RECON_ID)}/live${sidParam}`;
+    // Direct start (either no elevation required or consent unchecked -> fallback)
+    await executeScanStart(isConsentChecked, null);
   } catch (err) {
     showWorkspaceFeedback(true, 'Request error: ' + err.message);
   } finally {
@@ -1164,6 +1408,12 @@ document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('.nuclei-sev-check').forEach(cb => { cb.checked = sSet.has(cb.value); });
     }
     toggleEnginePanels();
+  }
+  if (EXISTING_CFG.privilege_consent) {
+    const a = document.getElementById('activePrivilegeConsentCheck');
+    const v = document.getElementById('vulnPrivilegeConsentCheck');
+    if (a) a.checked = true;
+    if (v) v.checked = true;
   }
   refreshReviewSummary();
   if (typeof lucide !== 'undefined') lucide.createIcons();

@@ -831,6 +831,10 @@ class FootprintIQRepository:
             "scan_config_json": getattr(s, "scan_config_json", None),
             "scanner_versions": cls._safe_json_loads(getattr(s, "scanner_versions_json", None), {}),
             "target_authorization_ref": getattr(s, "target_authorization_ref", None),
+            "privilege_consent_given": bool(getattr(s, "privilege_consent_given", False)),
+            "privilege_elevation_required": bool(getattr(s, "privilege_elevation_required", False)),
+            "privilege_status": getattr(s, "privilege_status", "none") or "none",
+            "privilege_authorized_at": s.privilege_authorized_at.isoformat() if getattr(s, "privilege_authorized_at", None) else None,
             "error_message": getattr(s, "error_message", None),
             "result_summary_json": getattr(s, "result_summary_json", None),
             "result_summary": cls._safe_json_loads(getattr(s, "result_summary_json", None), {}),
@@ -857,6 +861,10 @@ class FootprintIQRepository:
         out.setdefault("scan_config", cls._safe_json_loads(out.get("scan_config_json"), {}))
         out.setdefault("scanner_versions", cls._safe_json_loads(out.get("scanner_versions_json"), {}))
         out.setdefault("result_summary", cls._safe_json_loads(out.get("result_summary_json"), {}))
+        out.setdefault("privilege_consent_given", False)
+        out.setdefault("privilege_elevation_required", False)
+        out.setdefault("privilege_status", "none")
+        out.setdefault("privilege_authorized_at", None)
         started_iso = out.get("started_at")
         completed_iso = out.get("completed_at")
         dur_secs = out.get("duration_seconds")
@@ -894,6 +902,10 @@ class FootprintIQRepository:
         scan_config_json: Optional[str] = None,
         scanner_versions: Optional[Dict[str, str]] = None,
         target_authorization_ref: Optional[str] = None,
+        privilege_consent_given: bool = False,
+        privilege_elevation_required: bool = False,
+        privilege_status: str = "none",
+        privilege_authorized_at: Optional[datetime] = None,
         session: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Atomically creates a scan execution record with monotonic per-investigation run_number."""
@@ -927,6 +939,10 @@ class FootprintIQRepository:
                         scan_config_json=scan_config_json,
                         scanner_versions_json=ver_str,
                         target_authorization_ref=target_authorization_ref,
+                        privilege_consent_given=privilege_consent_given,
+                        privilege_elevation_required=privilege_elevation_required,
+                        privilege_status=privilege_status,
+                        privilege_authorized_at=privilege_authorized_at,
                         created_at=utcnow()
                     )
                     db.add(scan)
@@ -972,6 +988,10 @@ class FootprintIQRepository:
             "scan_config_json": scan_config_json,
             "scanner_versions_json": ver_str,
             "target_authorization_ref": target_authorization_ref,
+            "privilege_consent_given": privilege_consent_given,
+            "privilege_elevation_required": privilege_elevation_required,
+            "privilege_status": privilege_status,
+            "privilege_authorized_at": privilege_authorized_at.isoformat() if privilege_authorized_at else None,
             "created_at": utcnow().isoformat()
         }
         self._mem_scans[scan_id] = rec
@@ -985,6 +1005,8 @@ class FootprintIQRepository:
         error_message: Optional[str] = None,
         result_summary_json: Optional[str] = None,
         scanner_versions_json: Optional[str] = None,
+        privilege_status: Optional[str] = None,
+        privilege_authorized_at: Optional[datetime] = None,
         session: Optional[Session] = None
     ) -> bool:
         """Atomically updates a scan execution status and logs transitions."""
@@ -1013,6 +1035,10 @@ class FootprintIQRepository:
                             scan.result_summary_json = result_summary_json
                         if scanner_versions_json:
                             scan.scanner_versions_json = scanner_versions_json
+                        if privilege_status:
+                            scan.privilege_status = privilege_status
+                        if privilege_authorized_at:
+                            scan.privilege_authorized_at = privilege_authorized_at
                         return True
         except Exception as e:
             logger.debug(f"SQL Server scan update fallback: {e}")
@@ -1034,6 +1060,10 @@ class FootprintIQRepository:
                 rec["result_summary_json"] = result_summary_json
             if scanner_versions_json:
                 rec["scanner_versions_json"] = scanner_versions_json
+            if privilege_status:
+                rec["privilege_status"] = privilege_status
+            if privilege_authorized_at:
+                rec["privilege_authorized_at"] = privilege_authorized_at.isoformat() if hasattr(privilege_authorized_at, "isoformat") else str(privilege_authorized_at)
             return True
         return False
 
@@ -2662,6 +2692,10 @@ class FootprintIQRepository:
         scan_config_json: Optional[str] = None,
         scanner_versions: Optional[Dict[str, str]] = None,
         target_authorization_ref: Optional[str] = None,
+        privilege_consent_given: bool = False,
+        privilege_elevation_required: bool = False,
+        privilege_status: str = "none",
+        privilege_authorized_at: Optional[datetime] = None,
         session: Optional[Session] = None
     ) -> Dict[str, Any]:
         """
@@ -2724,6 +2758,10 @@ class FootprintIQRepository:
                         scan_config_json=eff_cfg_str,
                         scanner_versions_json=ver_str,
                         target_authorization_ref=target_authorization_ref or camp.authorized_by,
+                        privilege_consent_given=privilege_consent_given,
+                        privilege_elevation_required=privilege_elevation_required,
+                        privilege_status=privilege_status,
+                        privilege_authorized_at=privilege_authorized_at,
                         started_at=utcnow(),
                         created_at=utcnow()
                     )
@@ -2768,7 +2806,10 @@ class FootprintIQRepository:
                         "run_label": f"Run {next_run:03d}",
                         "target": camp.target_value,
                         "scan_type": scan_type,
-                        "profile": profile
+                        "profile": profile,
+                        "privilege_consent_given": privilege_consent_given,
+                        "privilege_elevation_required": privilege_elevation_required,
+                        "privilege_status": privilege_status,
                     }
         except (ConcurrencyConflictError, EntityNotFoundError):
             raise
@@ -2818,6 +2859,10 @@ class FootprintIQRepository:
             "scan_config_json": eff_cfg_str,
             "scanner_versions_json": ver_str,
             "target_authorization_ref": target_authorization_ref or camp.get("authorized_by"),
+            "privilege_consent_given": privilege_consent_given,
+            "privilege_elevation_required": privilege_elevation_required,
+            "privilege_status": privilege_status,
+            "privilege_authorized_at": privilege_authorized_at.isoformat() if privilege_authorized_at else None,
             "started_at": started_iso,
             "created_at": started_iso
         }

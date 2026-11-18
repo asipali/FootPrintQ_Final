@@ -269,7 +269,8 @@ class UnifiedScanOrchestrator:
         investigation_id: str,
         scan_id: str,
         custom_active_options: Optional[Dict[str, Any]] = None,
-        use_db_scope: bool = False
+        use_db_scope: bool = False,
+        allow_privileged: bool = False
     ) -> Dict[str, Any]:
         """Runs Nmap host/port/service detection and extracts discovered hosts & open ports cleanly."""
         prof = profile if profile in ("lab-basic", "lab-safe-minimal", "lab-common-services") else "lab-basic"
@@ -280,7 +281,8 @@ class UnifiedScanOrchestrator:
             scan_id=scan_id,
             custom_active_options=custom_active_options,
             repo=self.repo if use_db_scope else None,
-            investigation_id=investigation_id if use_db_scope else None
+            investigation_id=investigation_id if use_db_scope else None,
+            allow_privileged=allow_privileged
         )
 
         # Save active Nmap XML evidence

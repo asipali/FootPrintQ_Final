@@ -169,7 +169,8 @@ class ActiveReconPipeline:
         skip_connectivity_check: bool = False,
         custom_active_options: Optional[Dict[str, Any]] = None,
         repo: Optional[Any] = None,
-        investigation_id: Optional[str] = None
+        investigation_id: Optional[str] = None,
+        allow_privileged: bool = False
     ) -> ActiveReconResult:
         """
         Executes complete active reconnaissance workflow:
@@ -250,7 +251,8 @@ class ActiveReconPipeline:
                 auth_record=auth_record,
                 options=custom_active_options,
                 output_dir=scan_evidence_dir,
-                timeout=self.timeout
+                timeout=self.timeout,
+                allow_privileged=allow_privileged
             )
         else:
             collector_res = self.collector.execute_scan(

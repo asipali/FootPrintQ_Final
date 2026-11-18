@@ -663,6 +663,7 @@ def build_report_analysis(
                 "port": v["port"],
                 "protocol": v["protocol"],
                 "service": v["service"],
+                "count": len(v["hosts"]),
                 "hosts_count": len(v["hosts"]),
                 "findings_count": v["findings_count"],
                 "is_high_risk_service": v["service"] in {
@@ -735,28 +736,43 @@ def build_report_analysis(
     # 5. Historical Scan-Run Trend across this Investigation
     all_inv_findings = repo.list_findings(investigation_id)
     trend_rows: List[Dict[str, Any]] = []
-    ordered_runs = sorted(all_scans, key=lambda s: (int(s.get("run_number") or 1), s.get("created_at") or ""))
+    ordered_runs = sorted(
+        all_scans,
+        key=lambda s: (int(s.get("run_number") or 1), s.get("started_at") or s.get("created_at") or "")
+    )
     for run in ordered_runs:
         sid = run.get("scan_id")
         r_findings = [f for f in all_inv_findings if f.get("scan_id") == sid]
         r_exp = ExposureScoringEngine.calculate_investigation_exposure(r_findings)
         r_sev = r_exp["severity_counts"]
+        status_clean = str(run.get("status") or "").lower()
+        is_failed = status_clean in ("failed", "cancelled", "interrupted", "error")
+        is_completed = status_clean in ("completed", "partially_completed", "partial")
+        is_partial = status_clean in ("partially_completed", "partial")
+
+        # Do not treat missing results from failed scans as zero findings
+        run_findings_count = len(r_findings) if not is_failed else None
+        run_risk_score = r_exp["exposure_score"] if not is_failed else None
+
         trend_rows.append({
             "scan_id": sid,
             "run_number": int(run.get("run_number") or 1),
             "run_label": run.get("run_label") or f"Run {int(run.get('run_number') or 1):03d}",
             "scan_type": run.get("scan_type"),
             "status": run.get("status"),
+            "is_completed": is_completed,
+            "is_partial": is_partial,
             "started_at": run.get("started_at") or run.get("created_at"),
             "started_at_ist": run.get("started_at_ist") or run.get("created_at_ist") or format_ist(run.get("started_at") or run.get("created_at")),
-            "Critical": int(r_sev.get("Critical", 0)),
-            "High": int(r_sev.get("High", 0)),
-            "Medium": int(r_sev.get("Medium", 0)),
-            "Low": int(r_sev.get("Low", 0)),
-            "Informational": int(r_sev.get("Informational", 0)) + int(r_sev.get("Info", 0)),
-            "total_findings": len(r_findings),
-            "risk_score": r_exp["exposure_score"] if str(run.get("status") or "").lower() != "failed" else None,
+            "Critical": int(r_sev.get("Critical", 0)) if not is_failed else None,
+            "High": int(r_sev.get("High", 0)) if not is_failed else None,
+            "Medium": int(r_sev.get("Medium", 0)) if not is_failed else None,
+            "Low": int(r_sev.get("Low", 0)) if not is_failed else None,
+            "Informational": (int(r_sev.get("Informational", 0)) + int(r_sev.get("Info", 0))) if not is_failed else None,
+            "total_findings": run_findings_count,
+            "risk_score": run_risk_score,
         })
+    trend_completed_count = sum(1 for r in trend_rows if r.get("is_completed"))
 
     # 6. Executive Analysis
     key_takeaways: List[str] = []
@@ -968,10 +984,11 @@ def build_report_analysis(
             "classification_breakdown": classification_counts,
             "scanner_contribution": scanner_contribution,
             "affected_hosts": affected_hosts[:15],
-            "exposed_services": exposed_services_list[:15],
+            "exposed_services": exposed_services_list,
             "vulnerability_categories": dict(category_counts),
             "overall_risk_score": risk_interpretation,
             "historical_trend": trend_rows,
+            "trend_completed_count": trend_completed_count,
             "run_duration": duration_human(
                 selected_scan.get("started_at") if selected_scan else None,
                 selected_scan.get("completed_at") if selected_scan else None,

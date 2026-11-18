@@ -253,10 +253,17 @@
         <h2 class="text-sm font-bold text-slate-900">Historical Risk &amp; Findings Trend</h2>
         <span class="text-[10px] text-slate-400">{{ (an.historical_trend or [])|length }} scan run(s) recorded</span>
       </div>
-      <div class="h-52 relative"><canvas id="chartHistoricalTrend"></canvas></div>
-      {% if (an.historical_trend or [])|length < 2 %}
-      <p class="text-[11px] text-slate-500">Launch additional scan runs under this investigation to plot multi-run remediation progress over time.</p>
-      {% endif %}
+      {% set trend_completed = an.trend_completed_count if an.trend_completed_count is defined else ((an.historical_trend or [])|length) %}
+      <div id="trendChartContainer" class="h-52 relative {% if trend_completed < 2 %}hidden{% endif %}">
+        <canvas id="chartHistoricalTrend"></canvas>
+      </div>
+      <div id="trendEmptyNotice" class="h-52 flex flex-col items-center justify-center text-center p-4 rounded-lg bg-slate-50 border border-dashed border-slate-200 {% if trend_completed >= 2 %}hidden{% endif %}">
+        <svg class="w-8 h-8 text-slate-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+        </svg>
+        <p class="text-xs font-semibold text-slate-700">Historical trend requires at least two completed scan runs.</p>
+        <p class="text-[11px] text-slate-400 mt-1">Execute additional scans under this investigation to plot multi-run remediation progress over time.</p>
+      </div>
     </div>
   </div>
 
@@ -645,16 +652,18 @@ function renderAllCharts() {
     });
   }
 
-  const svcs = (ANALYTICS.exposed_services || []).slice(0, 10);
+  const svcs = (ANALYTICS.exposed_services || []);
   const ctxSvcs = document.getElementById('chartServicesBar');
   if (ctxSvcs) {
+    const counts = svcs.map((s) => Number(s.count ?? s.hosts_count ?? 0));
+    const maxCount = counts.length ? Math.max(...counts) : 0;
     chartInstances.services = new Chart(ctxSvcs, {
       type: 'bar',
       data: {
         labels: svcs.length ? svcs.map((s) => s.label) : ['No Open Ports Recorded'],
         datasets: [{
           label: 'Exposed Service Instances',
-          data: svcs.length ? svcs.map((s) => Number(s.count || 0)) : [0],
+          data: svcs.length ? counts : [0],
           backgroundColor: '#2563eb',
           borderRadius: 4,
         }],
@@ -662,46 +671,98 @@ function renderAllCharts() {
       options: {
         ...baseOpts,
         scales: {
-          x: { ticks: { color: tc.text, font: { size: 10 } }, grid: { display: false } },
-          y: { beginAtZero: true, ticks: { precision: 0, color: tc.text }, grid: { color: tc.grid } },
+          x: {
+            ticks: { color: tc.text, font: { size: 10 } },
+            grid: { display: false },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: { precision: 0, stepSize: 1, color: tc.text },
+            grid: { color: tc.grid },
+            suggestedMax: Math.max(maxCount, 1) + (maxCount <= 2 ? 1 : 0),
+          },
         },
       },
     });
   }
 
-  const trend = ANALYTICS.historical_trend || [];
+  const allTrendRuns = ANALYTICS.historical_trend || [];
+  const completedTrend = allTrendRuns.filter((t) => t.is_completed !== false && t.status !== 'failed');
+  const trendContainer = document.getElementById('trendChartContainer');
+  const trendNotice = document.getElementById('trendEmptyNotice');
   const ctxTrend = document.getElementById('chartHistoricalTrend');
-  if (ctxTrend) {
-    chartInstances.trend = new Chart(ctxTrend, {
-      type: 'line',
-      data: {
-        labels: trend.length ? trend.map((t) => t.run_label || t.scan_id) : ['Current Scope'],
-        datasets: [
-          {
-            label: 'Total Findings',
-            data: trend.length ? trend.map((t) => Number(t.total_findings || 0)) : [ALL_FINDINGS.length],
-            borderColor: '#2563eb',
-            backgroundColor: 'rgba(37, 99, 235, 0.15)',
-            tension: 0.25,
-            fill: true,
-          },
-          {
-            label: 'Risk Score',
-            data: trend.length ? trend.map((t) => (t.risk_score !== null ? Number(t.risk_score) : null)) : [ANALYSIS_DATA.risk_interpretation?.exposure_score ?? null],
-            borderColor: '#dc2626',
-            tension: 0.25,
-            spanGaps: true,
-          },
-        ],
-      },
-      options: {
-        ...baseOpts,
-        scales: {
-          x: { ticks: { color: tc.text, font: { size: 10 } }, grid: { display: false } },
-          y: { beginAtZero: true, ticks: { precision: 0, color: tc.text }, grid: { color: tc.grid } },
+
+  if (completedTrend.length < 2) {
+    if (trendContainer) trendContainer.classList.add('hidden');
+    if (trendNotice) trendNotice.classList.remove('hidden');
+  } else {
+    if (trendContainer) trendContainer.classList.remove('hidden');
+    if (trendNotice) trendNotice.classList.add('hidden');
+    if (ctxTrend) {
+      chartInstances.trend = new Chart(ctxTrend, {
+        type: 'line',
+        data: {
+          labels: completedTrend.map((t) => t.run_label || t.scan_id),
+          datasets: [
+            {
+              label: 'Total Findings',
+              data: completedTrend.map((t) => (t.total_findings !== null && t.total_findings !== undefined) ? Number(t.total_findings) : null),
+              borderColor: '#2563eb',
+              backgroundColor: 'rgba(37, 99, 235, 0.15)',
+              tension: 0.25,
+              fill: true,
+              yAxisID: 'y',
+              pointRadius: 4,
+              pointHoverRadius: 6,
+            },
+            {
+              label: 'Risk Score',
+              data: completedTrend.map((t) => (t.risk_score !== null && t.risk_score !== undefined) ? Number(t.risk_score) : null),
+              borderColor: '#dc2626',
+              backgroundColor: 'rgba(220, 38, 38, 0.1)',
+              tension: 0.25,
+              spanGaps: true,
+              yAxisID: 'y1',
+              pointRadius: 4,
+              pointHoverRadius: 6,
+            },
+          ],
         },
-      },
-    });
+        options: {
+          ...baseOpts,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          scales: {
+            x: {
+              ticks: { color: tc.text, font: { size: 10 } },
+              grid: { display: false },
+            },
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              beginAtZero: true,
+              title: { display: true, text: 'Findings', color: tc.text, font: { size: 10 } },
+              ticks: { precision: 0, color: tc.text },
+              grid: { color: tc.grid },
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              beginAtZero: true,
+              min: 0,
+              max: 100,
+              title: { display: true, text: 'Risk Score', color: tc.text, font: { size: 10 } },
+              ticks: { precision: 0, color: tc.text },
+              grid: { display: false },
+            },
+          },
+        },
+      });
+    }
   }
 }
 

@@ -40,6 +40,12 @@ from src.services.rbac_service import (
     is_admin_user,
     record_security_audit,
 )
+from src.security.privilege_detector import PrivilegeDetector
+from src.security.psa_service import (
+    PSAService,
+    PSATicketExpiredOrInvalidError,
+    PSAIdentityVerificationError,
+)
 from src.api.dependencies import get_repository, get_current_user, require_investigator
 
 router = APIRouter(prefix="/api/v1/recon", tags=["Recon Campaigns"])
@@ -87,6 +93,21 @@ class StartReconRequest(BaseModel):
     selected_categories: Optional[List[str]] = None
     scan_config: Optional[Dict[str, Any]] = None
     scan_config_json: Optional[str] = None
+    privilege_consent: Optional[bool] = Field(False, example=False)
+    psa_ticket: Optional[str] = Field(None, example="psa_...")
+
+
+class PSADetectRequest(BaseModel):
+    scan_config: Optional[Dict[str, Any]] = None
+    scan_config_json: Optional[str] = None
+    scan_type: Optional[str] = "combined"
+
+
+class PSAVerifyRequest(BaseModel):
+    password: str = Field(..., description="Investigator FootprintIQ account password")
+    scan_config: Optional[Dict[str, Any]] = None
+    scan_config_json: Optional[str] = None
+    scan_type: Optional[str] = "combined"
 
 
 class RemediationUpdateRequest(BaseModel):
@@ -619,6 +640,109 @@ def get_recon_campaign(
     }
 
 
+@router.post("/{recon_id}/psa/detect")
+def detect_privilege_requirements(
+    recon_id: str,
+    req: PSADetectRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    campaign = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        request=request,
+        action_label="PSA_DETECT",
+    )
+    if not campaign.get("recon_id"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
+
+    if isinstance(req.scan_config, dict) and req.scan_config:
+        cfg = dict(req.scan_config)
+    elif req.scan_config_json:
+        try:
+            cfg = json.loads(req.scan_config_json)
+        except Exception:
+            cfg = {}
+    else:
+        try:
+            cfg = json.loads(campaign.get("scan_config_json") or "{}")
+        except Exception:
+            cfg = {}
+
+    analysis = PrivilegeDetector.analyze_scan_config(cfg, scan_type=req.scan_type or "combined")
+    return analysis.to_dict()
+
+
+@router.post("/{recon_id}/psa/verify")
+def verify_identity_for_privilege(
+    recon_id: str,
+    req: PSAVerifyRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_investigator),
+    repo: FootprintIQRepository = Depends(get_repository)
+):
+    campaign = enforce_investigation_access(
+        repo,
+        current_user,
+        recon_id,
+        require_execution=True,
+        request=request,
+        action_label="PSA_VERIFY",
+    )
+    if not campaign.get("recon_id"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Recon Campaign '{recon_id}' not found.")
+
+    if not req.password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required for identity verification.")
+
+    if isinstance(req.scan_config, dict) and req.scan_config:
+        cfg = dict(req.scan_config)
+    elif req.scan_config_json:
+        try:
+            cfg = json.loads(req.scan_config_json)
+        except Exception:
+            cfg = {}
+    else:
+        try:
+            cfg = json.loads(campaign.get("scan_config_json") or "{}")
+        except Exception:
+            cfg = {}
+
+    analysis = PrivilegeDetector.analyze_scan_config(cfg, scan_type=req.scan_type or "combined")
+    psa_svc = PSAService(repo=repo)
+    try:
+        ticket = psa_svc.verify_identity_and_issue_ticket(
+            current_user=current_user,
+            plain_password=req.password,
+            recon_id=recon_id,
+            target=campaign.get("target_value", ""),
+            approved_operations=analysis.privileged_operations
+        )
+        record_security_audit(
+            repo,
+            user=current_user,
+            action="PSA_IDENTITY_VERIFIED",
+            target_resource=recon_id,
+            details={"approved_operations": analysis.privileged_operations},
+            outcome="SUCCESS",
+            request=request
+        )
+        return ticket
+    except PSAIdentityVerificationError as e:
+        record_security_audit(
+            repo,
+            user=current_user,
+            action="PSA_IDENTITY_VERIFICATION_FAILED",
+            target_resource=recon_id,
+            details={"error": "Invalid credentials provided for privilege authorization"},
+            outcome="DENIED",
+            request=request
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+
+
 @router.post("/{recon_id}/start")
 def start_recon_scan(
     recon_id: str,
@@ -724,6 +848,8 @@ def start_recon_scan(
             operator=current_user.get("username", "asip_ali"),
             initiating_user_id=current_user.get("id", current_user.get("user_id")),
             scan_config_override=cfg if has_override else None,
+            privilege_consent=bool(req.privilege_consent),
+            psa_ticket=req.psa_ticket,
         )
 
         record_security_audit(
@@ -736,6 +862,9 @@ def start_recon_scan(
                 "scan_id": job["scan_id"],
                 "run_number": job.get("run_number"),
                 "scan_type": eff_scan_type,
+                "privilege_status": job.get("privilege_status"),
+                "privilege_consent_given": job.get("privilege_consent_given"),
+                "privilege_elevation_required": job.get("privilege_elevation_required"),
             },
             outcome="SUCCESS",
             request=request,
@@ -743,6 +872,28 @@ def start_recon_scan(
         return job
     except TargetAuthorizationError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PSATicketExpiredOrInvalidError as e:
+        record_security_audit(
+            repo,
+            user=current_user,
+            action="PRIVILEGE_TICKET_REJECTED",
+            target_resource=recon_id,
+            details={"error": str(e)},
+            outcome="DENIED",
+            request=request,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PSAIdentityVerificationError as e:
+        record_security_audit(
+            repo,
+            user=current_user,
+            action="PRIVILEGE_VERIFICATION_FAILED",
+            target_resource=recon_id,
+            details={"error": str(e)},
+            outcome="DENIED",
+            request=request,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
     except ConcurrencyConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except EntityNotFoundError as e:

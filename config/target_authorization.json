@@ -52,5 +52,17 @@
       "added_by": "admin"
     }
   ],
-  "authorized_domains": []
+  "authorized_domains": [
+    {
+      "domain": "scanme.nmap.org",
+      "notes": "Explicitly authorized security assessment domain",
+      "added_by": "admin",
+      "added_at": "2026-11-12T04:06:43.354823+00:00",
+      "permitted_profiles": [
+        "lab-basic",
+        "lab-safe-minimal",
+        "lab-common-services"
+      ]
+    }
+  ]
 }

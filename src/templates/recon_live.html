@@ -19,6 +19,15 @@
           <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
             {{ selected_scan.run_label or ('Run ' ~ '%03d'|format(selected_scan.run_number or 1)) }}
           </span>
+          {% if selected_scan.privilege_status == 'authorized' %}
+          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300">
+            Elevated Privileges
+          </span>
+          {% elif selected_scan.privilege_status == 'fallback_unprivileged' %}
+          <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+            Unprivileged Fallback
+          </span>
+          {% endif %}
           {% endif %}
           <span id="liveStatusPill" class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-blue-100 text-blue-800">
             {{ campaign.status }}

@@ -19,6 +19,12 @@ from src.db.repository import FootprintIQRepository
 from src.orchestration.unified_orchestrator import UnifiedScanOrchestrator
 from src.authorization.target_authorizer import TargetAuthorizer, TargetAuthorizationError
 from src.utils.timezone import format_ist
+from src.security.privilege_detector import PrivilegeDetector, PrivilegeAnalysis
+from src.security.psa_service import (
+    PSAService,
+    PSATicketExpiredOrInvalidError,
+    PSAIdentityVerificationError,
+)
 
 logger = logging.getLogger("FootprintIQ.ExecutionManager")
 
@@ -173,6 +179,8 @@ class ExecutionManager:
         operator: str = "asip_ali",
         initiating_user_id: Optional[int] = None,
         scan_config_override: Optional[Dict[str, Any]] = None,
+        privilege_consent: bool = False,
+        psa_ticket: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Launches an asynchronous background scan job for the given Recon Campaign.
@@ -192,6 +200,41 @@ class ExecutionManager:
                 scan_config = json.loads(raw_cfg) if isinstance(raw_cfg, str) else (raw_cfg or {})
             except Exception:
                 scan_config = {}
+
+        # Privilege Detection & Enforcement (PSA)
+        priv_analysis = PrivilegeDetector.analyze_scan_config(scan_config, scan_type=scan_type)
+        privilege_consent_given = bool(privilege_consent)
+        privilege_elevation_required = priv_analysis.requires_privilege
+        privilege_status = "none"
+        privilege_authorized_at = None
+        allow_privileged = False
+
+        if priv_analysis.requires_privilege:
+            if not privilege_consent_given:
+                # Scenario A: Privileged operations requested without consent -> unprivileged fallback
+                scan_config = priv_analysis.sanitized_config
+                privilege_status = "fallback_unprivileged"
+                allow_privileged = False
+                logger.info(f"Campaign {recon_id}: Privileged operations requested without consent. Applied unprivileged fallback.")
+            else:
+                # Scenario B: Consent checked -> validate ephemeral ticket
+                psa_svc = PSAService(repo=self.repo)
+                if not psa_ticket:
+                    raise PSATicketExpiredOrInvalidError(
+                        "Elevated privileges requested and consent granted, but no identity authorization ticket was provided."
+                    )
+                ticket = psa_svc.validate_and_consume_ticket(
+                    token=psa_ticket,
+                    user_id=initiating_user_id or 1,
+                    recon_id=recon_id
+                )
+                privilege_status = "authorized"
+                privilege_authorized_at = datetime.now(timezone.utc)
+                allow_privileged = True
+                logger.info(f"Campaign {recon_id}: PSA ticket verified and consumed. Elevated execution authorized.")
+        else:
+            if privilege_consent_given:
+                privilege_status = "none"
 
         selected_categories = [str(c).lower() for c in (scan_config.get("selected_categories") or [])]
         targets_list = scan_config.get("targets") or [t.strip() for t in str(target).split(",") if t.strip()]
@@ -233,6 +276,10 @@ class ExecutionManager:
             selected_components=sel_components,
             scan_config_json=cfg_json_str,
             target_authorization_ref=campaign.get("authorized_by"),
+            privilege_consent_given=privilege_consent_given,
+            privilege_elevation_required=privilege_elevation_required,
+            privilege_status=privilege_status,
+            privilege_authorized_at=privilege_authorized_at,
         )
         scan_id = job_claim["scan_id"]
 
@@ -244,7 +291,7 @@ class ExecutionManager:
         # Launch in background worker thread with independent session
         thread = threading.Thread(
             target=self._run_scan_worker,
-            args=(ctx, scan_type, profile, custom_scripts, operator, scan_config),
+            args=(ctx, scan_type, profile, custom_scripts, operator, scan_config, allow_privileged, priv_analysis, privilege_status),
             daemon=True
         )
         thread.start()
@@ -258,7 +305,10 @@ class ExecutionManager:
             "run_label": job_claim.get("run_label"),
             "target": target,
             "scan_type": scan_type,
-            "profile": profile
+            "profile": profile,
+            "privilege_consent_given": privilege_consent_given,
+            "privilege_elevation_required": privilege_elevation_required,
+            "privilege_status": privilege_status,
         }
 
     def _run_scan_worker(
@@ -268,7 +318,10 @@ class ExecutionManager:
         profile: str,
         custom_scripts: Optional[List[str]],
         operator: str,
-        scan_config: Optional[Dict[str, Any]] = None
+        scan_config: Optional[Dict[str, Any]] = None,
+        allow_privileged: bool = False,
+        priv_analysis: Optional[PrivilegeAnalysis] = None,
+        privilege_status: str = "none"
     ):
         """Worker thread executing configured recon stages with short-lived ACID DB transactions."""
         worker_repo = FootprintIQRepository()
@@ -310,6 +363,26 @@ class ExecutionManager:
             progress=10,
             component="Authorization"
         )
+
+        if priv_analysis and priv_analysis.requires_privilege and privilege_status == "fallback_unprivileged":
+            self._emit_event(
+                ctx,
+                "warning",
+                f"Privilege Consent Notice: Privileged operations ({', '.join(priv_analysis.privileged_operations)}) were not authorized. "
+                f"Fell back to safe unprivileged execution ({'; '.join(priv_analysis.skipped_operations)}).",
+                stage="AUTHORIZATION",
+                progress=10,
+                component="Privilege Consent"
+            )
+        elif allow_privileged:
+            self._emit_event(
+                ctx,
+                "log",
+                "Privilege Authorization Active: Identity verified. Elevated scan operations authorized.",
+                stage="AUTHORIZATION",
+                progress=10,
+                component="Privilege Consent"
+            )
 
         all_findings: List[Dict[str, Any]] = []
         passive_results: List[Dict[str, Any]] = []
@@ -435,7 +508,8 @@ class ExecutionManager:
                             investigation_id=ctx.recon_id,
                             scan_id=ctx.scan_id,
                             custom_active_options=effective_active_opts,
-                            use_db_scope=True
+                            use_db_scope=True,
+                            allow_privileged=allow_privileged
                         )
                         stage_stat = services_res.get("status", "COMPLETED")
                         hosts_found = services_res.get("hosts", [])
