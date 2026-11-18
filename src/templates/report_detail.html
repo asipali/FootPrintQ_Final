@@ -655,7 +655,7 @@ function renderAllCharts() {
   const svcs = (ANALYTICS.exposed_services || []);
   const ctxSvcs = document.getElementById('chartServicesBar');
   if (ctxSvcs) {
-    const counts = svcs.map((s) => Number(s.count ?? s.hosts_count ?? 0));
+    const counts = svcs.map((s) => Number(s.count ?? s.hosts_count ?? 1));
     const maxCount = counts.length ? Math.max(...counts) : 0;
     chartInstances.services = new Chart(ctxSvcs, {
       type: 'bar',

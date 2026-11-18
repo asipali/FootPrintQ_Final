@@ -76,6 +76,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Startup scan durability recovery notice: {e}")
 
+    # Seed high-fidelity combined scanning demo investigations
+    try:
+        from src.services.demo_seeder import seed_demo_investigations
+        seeded = seed_demo_investigations(repo=repo)
+        if seeded:
+            logger.info(f"[DemoSeeder] {len(seeded)} demo combined investigations verified/ready.")
+    except Exception as e:
+        logger.warning(f"Demo investigation seeder notice: {e}")
+
     yield
     logger.info("FootprintIQ platform shutdown complete.")
 

@@ -65,7 +65,14 @@
 - [12. Testing and Troubleshooting](#12-testing-and-troubleshooting)
   - [Running the Automated Test Suite](#running-the-automated-test-suite)
   - [Common Troubleshooting Scenarios](#common-troubleshooting-scenarios)
-- [13. Screenshots and Demonstration](#13-screenshots-and-demonstration)
+- [13. Application Screenshots](#13-application-screenshots)
+  - [A. Application Dashboard](#a-application-dashboard)
+  - [B. Reconnaissance Campaign Management](#b-reconnaissance-campaign-management)
+  - [C. Create New Investigation](#c-create-new-investigation)
+  - [D. Reconnaissance Workspace](#d-reconnaissance-workspace)
+  - [E. Vulnerability Findings & Correlation](#e-vulnerability-findings--correlation)
+  - [F. Integrated Security Assessment Report](#f-integrated-security-assessment-report)
+  - [G. Administrator & Governance](#g-administrator--governance)
 - [14. Roadmap](#14-roadmap)
 - [15. Responsible Use](#15-responsible-use)
 - [16. License and Contribution](#16-license-and-contribution)
@@ -856,34 +863,125 @@ python -m unittest tests/test_report_data_integrity_audit.py
 
 ---
 
-## 13. Screenshots and Demonstration
+## 13. Application Screenshots
 
-> [!NOTE]
-> *Production screenshot captures from the FootprintIQ web application will be added here.*
+The following screenshots capture the production interface and operational workflows of the FootprintIQ platform, demonstrating passive OSINT collection, active network reconnaissance, vulnerability assessment, entity correlation, visual risk analytics, and administrator governance.
 
-```
-+----------------------------------------------------------------------------------------------------+
-|  FootprintIQ Enterprise - Investigation Workspace                                                  |
-|  Logged in as: investigator1 [Role: INVESTIGATOR]                                                 |
-+----------------------------------------------------------------------------------------------------+
-|  [Recon Workspace]  FIQ-REC-20261117-0008 | Target: 192.168.56.111 (Authorized Lab VM)            |
-|                                                                                                    |
-|  [ Passive Recon ]   [ Active Recon (Selected) ]   [ Vulnerability Assessment ]                    |
-|  ------------------------------------------------------------------------------------------------  |
-|  Port Mode: [ Top 1000 Ports ]      Scan Mode: [ TCP SYN Stealth (-sS) ]                           |
-|  Service Detection: [ Enabled (-sV) ]  OS Detection: [ Enabled (-O) ]   Timing: [ Normal (-T3) ]    |
-|                                                                                                    |
-|  [x] I authorize FootprintIQ to request elevated privileges for scan operations that require them. |
-|                                                                                                    |
-|  [ Start Recon Scan ]                                                                              |
-+----------------------------------------------------------------------------------------------------+
-|  Live Telemetry: [ Running ] | Privilege Mode: [ ELEVATED PRIVILEGES ]                             |
-|  > [18:29:03] [INFO] PSA ticket verified. Elevated scan authorized for target 192.168.56.111     |
-|  > [18:29:04] [INFO] Launching Nmap SYN scan (-sS -sV -O -p 1-1000 192.168.56.111)...              |
-|  > [18:29:12] [INFO] Discovered 23 open ports on 192.168.56.111 (vsftpd, OpenSSH, Apache, MySQL)   |
-|  > [18:29:15] [INFO] Scan complete. Raw XML saved to SeaweedFS (FID: 4,0a12cf88).                 |
-+----------------------------------------------------------------------------------------------------+
-```
+### A. Application Dashboard
+
+The **Investigator Intelligence Dashboard** provides an executive summary of target exposure and active reconnaissance operations. Key components include the aggregate multi-scanner **Exposure Score** (asymptotic 0–100 index), real-time **Vulnerability Statistics** categorized by severity (Critical, High, Medium, Low), active **Campaign Counts**, and **Scans Executed** against authorized targets. The **Start a Security Assessment** panel categorizes scanning capabilities into **Passive Reconnaissance** (23 domain, DNS, and OSINT checks), **Active Reconnaissance** (14 port, version, and OS detection options), and **Vulnerability Assessment** (22+ allowlisted NSE scripts, Nuclei templates, and Nessus policies). The lower ledger surfaces recent campaigns with real-time execution progress.
+
+<p align="center">
+  <img src="Screnshots/8.png"
+       alt="FootprintIQ Investigator Intelligence Dashboard"
+       width="100%">
+</p>
+
+The **Administrator Oversight Dashboard** provides platform-wide visibility across all investigator campaigns, multi-target risk scoring, aggregated vulnerability counts, and centralized shortcuts for user governance, scanner engine diagnostics, and security audit trails.
+
+<p align="center">
+  <img src="Screnshots/1.png"
+       alt="FootprintIQ Administrator Oversight Dashboard"
+       width="100%">
+</p>
+
+---
+
+### B. Reconnaissance Campaign Management
+
+The **Reconnaissance Campaign Directory** (`/recon`) serves as the central operational hub for managing multi-stage security engagements. Investigators track campaigns by unique collision-free Recon ID (`FIQ-REC-...`), campaign name and mission purpose (e.g., *Compliance Readiness Review*, *Passive OSINT Baseline*), designated target asset (`192.168.56.111`, `mozilla.org`), selected scan profiles (Passive Intelligence, Active Discovery, Nmap NSE, ProjectDiscovery Nuclei), pipeline progress percentage (0–100%), and lifecycle completion status (`Completed`, `Partially Completed`). The interface includes full-text search filtering and instant campaign initiation via the **Create New Recon** action.
+
+<p align="center">
+  <img src="Screnshots/7.png"
+       alt="FootprintIQ Reconnaissance Campaign Directory"
+       width="100%">
+</p>
+
+---
+
+### C. Create New Investigation
+
+The **Create New Recon** wizard (`/recon/new`) guides investigators through structured campaign onboarding with strict scope enforcement. Key inputs include **Recon Name**, **Target** (single IPv4/IPv6 address, CIDR subnet, or fully qualified domain name), and **Assessment Purpose**. Crucially, the wizard enforces a server-side **Target Authorization Confirmation** gate, requiring investigators to certify that the specified target falls within approved rules of engagement. Targets outside authorized CIDR ranges or unlisted domains are blocked by fail-closed authorization checks before any network traffic is transmitted.
+
+<p align="center">
+  <img src="Screnshots/9.png"
+       alt="FootprintIQ Investigation Creation Wizard"
+       width="100%">
+</p>
+
+---
+
+### D. Reconnaissance Workspace
+
+The **Reconnaissance Workspace** (`/recon/{id}/workspace`) provides fine-grained, policy-governed control over all three assessment phases prior to scan dispatch:
+
+- **Passive Reconnaissance Modules:** Granular configuration of **Domain Intelligence** (authoritative WHOIS, RDAP, standard and extended DNS records [A, AAAA, MX, NS, TXT, CNAME, SOA], nameserver diversity, Certificate Transparency subdomains, and SPF/DMARC/DNSSEC posture), **OSINT Intelligence** (public email harvesting via theHarvester, search engine indexing, registrant records, and passive technology stack inference), and **Infrastructure Intelligence** (IP/netblock resolution, reverse DNS PTR lookups, autonomous system number [ASN] mapping, and geolocation).
+- **Active Reconnaissance Configuration:** Execution parameters for network discovery, including host liveness checks (`-Pn`), TCP connect scanning (`-sT`), custom port ranges (Top 1000 standard ports or 1–65535 full sweep), Nmap service and version detection (`-sV`), safe default discovery scripts (`-sC`), service banner extraction, OS fingerprinting (`-O`), timing templates (`-T3` Balanced), and targeted protocol analyzers (SSH algorithms, HTTP headers, SMB signing, MySQL, FTP anonymous login, and SSL/TLS cipher suites). Also includes the **Privilege Consent & Elevation (PSA)** checkbox for authorized raw-socket operations.
+- **Vulnerability Assessment Engines & Policies:** Multi-scanner selection enabling allowlisted Nmap NSE scripts, ProjectDiscovery Nuclei template profiles (CVEs, misconfigurations, exposed panels, HTTP security), rate-limiting (requests/second), and Tenable Nessus integration settings with real-time license validation.
+
+<p align="center">
+  <img src="Screnshots/10.png"
+       alt="FootprintIQ Multi-Stage Reconnaissance Workspace"
+       width="100%">
+</p>
+
+---
+
+### E. Vulnerability Findings & Correlation
+
+The **Vulnerability Findings & Correlation** table (`/findings`) aggregates and normalizes security discoveries across all assessment engines into a unified evidentiary ledger. Each finding details the **Target IP and Port** (e.g., `192.168.56.111:21`, `:25`, `:5432`), exposed **Service Protocol** (`tcp/ftp`, `tcp/smtp`, `tcp/postgresql`), standardized **Severity and CVSS Score** (Critical 9.8, High 7.5, Medium 4.3), standardized **CVE References** (e.g., `CVE-2011-2523` vsftpd backdoor, `CVE-2014-3566` POODLE), descriptive **Vulnerability Title & Actionable Remediation Guidance**, originating **Detection Engine** (`NSE`, `Nuclei`), and cryptographic **Verification Status** (`verified`).
+
+<p align="center">
+  <img src="Screnshots/6.png"
+       alt="FootprintIQ Vulnerability Findings and Correlation Table"
+       width="100%">
+</p>
+
+The **Investigation Entity & Relationship Graph** (`/recon/{id}/results`) correlates collected reconnaissance artifacts and vulnerability findings into an interactive topology. Target IP nodes (green) connect to discovered open ports and services (yellow), which link directly to corroborated vulnerability entities (red/orange). The right panel provides deep attribution metadata, entity taxonomy (`maltego.Vulnerability`), confidence ratings (95%), evidence references (`nse_script:ssl-poodle`), multi-scanner provenance breakdowns (e.g., 24 Nmap observations, 1 Nuclei match, 7 NSE scripts), and one-click export to **Maltego GraphML**, CSV, and JSON.
+
+<p align="center">
+  <img src="Screnshots/11.png"
+       alt="FootprintIQ Investigation Entity and Relationship Graph"
+       width="100%">
+</p>
+
+---
+
+### F. Integrated Security Assessment Report
+
+The **Integrated Security Assessment Report** (`/reports/{id}`) delivers executive-ready reporting and deep technical risk analysis for every completed investigation run. Core components include:
+
+- **Executive Risk Index:** Asymptotic target risk calculation (e.g., `96.3 / 100 Critical`) based on finding severity, CVSS scores, asset context (23 open ports), and multi-engine corroboration.
+- **Visual Risk Analytics:** Interactive Chart.js visualizations including **Severity Distribution** (donut chart), **Severity Counts Breakdown** (bar chart), **Finding Classification** (Confirmed vs. Potential vs. Informational), **Scanner Coverage & Tool Contribution** (horizontal bars across Nmap, NSE, Nuclei, and theHarvester), and **Affected Hosts & Vulnerability Categories** (Known CVEs, Misconfigurations, TLS/SSL Weaknesses).
+- **Assessment Coverage & Limitations:** Transparent accounting of executed engines, partial stages, timeouts, and skipped checks.
+- **Scan-to-Scan Baseline Comparison:** Remediation verification tracking changes between sequential scan runs (Run 001 baseline vs. Run 002 verification).
+- **Executive Posture & Remediation Roadmap:** Plain-language executive risk drivers and prioritized, actionable remediation steps for engineering teams.
+
+<p align="center">
+  <img src="Screnshots/5.png"
+       alt="FootprintIQ Integrated Security Assessment Report"
+       width="100%">
+</p>
+
+---
+
+### G. Administrator & Governance
+
+The **User Management & Investigation Sharing** portal (`/admin/users`) gives administrators strict control over platform access and investigator collaboration. Administrators review registered user accounts (`admin`, `investigator1`, `investigator2`), manage account active status, assign RBAC roles (Administrator vs. Investigator), and approve or suspend credentials. The **Investigation Sharing** panel enables granular delegation, allowing administrators to grant collaborating investigators read or write access to specific reconnaissance campaigns without exposing other investigations.
+
+<p align="center">
+  <img src="Screnshots/3.png"
+       alt="FootprintIQ User Management and Investigation Sharing"
+       width="100%">
+</p>
+
+The **Security Audit Trail** (`/admin/audit-logs`) maintains an immutable, tamper-evident log of all security-critical operations across the platform. Every entry captures an exact timestamp (IST / UTC), acting **Actor** username, **Role**, standardized **Action** identifier (such as `ADMIN_ADD_LAB_RANGE`, `ADMIN_REMOVE_LAB_RANGE`, `LOGIN_SUCCESS`, `REPORT_ANALYZED`, `REPORT_GENERATED`, `RECON_SCAN_STARTED`), **Target Resource**, execution **Outcome** (`SUCCESS` / `DENIED`), client **Source IP**, and structured JSON **Event Details**.
+
+<p align="center">
+  <img src="Screnshots/4.png"
+       alt="FootprintIQ Security Audit Trail"
+       width="100%">
+</p>
 
 ---
 
